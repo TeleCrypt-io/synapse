@@ -179,10 +179,16 @@ class MediaStorageTests(unittest.HomeserverTestCase):
             local_provider=None,
         )
 
+        staging_path = os.path.join(self.test_dir, "staging")
+        staging_tmp_path = os.path.join(staging_path, "tmp")
+        staging_media_path = os.path.join(staging_path, "media")
+        os.makedirs(staging_tmp_path)
+        os.makedirs(staging_media_path)
+
         with patch(
-            "synapse.media.media_storage.MEDIA_STAGING_ROOT", self.test_dir
+            "synapse.media.media_storage.MEDIA_STAGING_ROOT", staging_path
         ), patch(
-            "synapse.media.media_storage.MEDIA_STAGING_DIRECTORY", self.test_dir
+            "synapse.media.media_storage.MEDIA_STAGING_DIRECTORY", staging_tmp_path
         ):
             self.get_success(
                 media_storage.store_file(
@@ -194,10 +200,53 @@ class MediaStorageTests(unittest.HomeserverTestCase):
         self.assertIsNotNone(recording_provider.upload_path)
         assert recording_provider.upload_path is not None
         self.assertEqual(
-            os.path.commonpath((self.test_dir, recording_provider.upload_path)),
-            self.test_dir,
+            os.path.commonpath((staging_tmp_path, recording_provider.upload_path)),
+            staging_tmp_path,
+        )
+        self.assertNotEqual(
+            os.path.commonpath((staging_media_path, recording_provider.upload_path)),
+            staging_media_path,
         )
         self.assertFalse(os.path.exists(recording_provider.upload_path))
+
+    def test_temporary_upload_fails_if_cleanup_leaves_residue(self) -> None:
+        recording_provider = RecordingStorageProvider()
+        media_storage = MediaStorage(
+            self.hs,
+            MediaFilePaths(self.test_dir),
+            [
+                StorageProviderWrapper(
+                    recording_provider,
+                    store_local=True,
+                    store_remote=True,
+                    store_synchronous=True,
+                )
+            ],
+            local_provider=None,
+        )
+
+        staging_path = os.path.join(self.test_dir, "staging")
+        staging_tmp_path = os.path.join(staging_path, "tmp")
+        os.makedirs(staging_tmp_path)
+
+        with patch(
+            "synapse.media.media_storage.MEDIA_STAGING_ROOT", staging_path
+        ), patch(
+            "synapse.media.media_storage.MEDIA_STAGING_DIRECTORY", staging_tmp_path
+        ), patch(
+            "synapse.media.media_storage.os.remove",
+            side_effect=OSError("test cleanup failure"),
+        ):
+            self.get_failure(
+                media_storage.store_file(
+                    BytesIO(b"temporary source"), FileInfo(None, "media")
+                ),
+                OSError,
+            )
+
+        self.assertIsNotNone(recording_provider.upload_path)
+        assert recording_provider.upload_path is not None
+        self.assertTrue(os.path.exists(recording_provider.upload_path))
 
 
 @attr.s(auto_attribs=True, slots=True, frozen=True)

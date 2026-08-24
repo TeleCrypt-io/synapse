@@ -233,6 +233,23 @@ class MediaStorage:
             dir=staging_directory, suffix=suffix, delete=False
         )
 
+    @staticmethod
+    def _remove_media_temp_file(path: str) -> None:
+        """Remove one disposable upload file, failing if cleanup is uncertain."""
+
+        try:
+            os.remove(path)
+        except OSError as error:
+            if error.errno == errno.ENOENT:
+                # A provider may have removed the source after a completed write.
+                # There is no residue in this case, so cleanup is complete.
+                return
+            logger.exception("Failed to remove temporary media file %s", path)
+            raise
+        except Exception:
+            logger.exception("Failed to remove temporary media file %s", path)
+            raise
+
     @trace_with_opname("MediaStorage.store_into_file")
     @contextlib.asynccontextmanager
     async def store_into_file(
@@ -301,16 +318,22 @@ class MediaStorage:
 
                 # If using a temp file, delete it after uploading to storage providers
                 if is_temp_file:
-                    try:
-                        os.remove(media_filepath)
-                    except Exception:
-                        pass
+                    self._remove_media_temp_file(media_filepath)
 
         except Exception as e:
             try:
-                os.remove(media_filepath)
+                if is_temp_file:
+                    self._remove_media_temp_file(media_filepath)
+                else:
+                    os.remove(media_filepath)
             except Exception:
-                pass
+                # Preserve the original storage failure. There is no metadata
+                # success on this path, but leave an explicit operational signal
+                # if the best-effort failure cleanup also cannot remove the file.
+                logger.exception(
+                    "Failed to clean up media file after storage failure: %s",
+                    media_filepath,
+                )
 
             raise e from None
 

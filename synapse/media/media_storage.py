@@ -19,6 +19,7 @@
 #
 #
 import contextlib
+import errno
 import hashlib
 import json
 import logging
@@ -64,6 +65,11 @@ if TYPE_CHECKING:
     from synapse.server import HomeServer
 
 logger = logging.getLogger(__name__)
+
+# Upload payloads must use the disk-backed staging mount, never the ambient
+# process TMPDIR. The entrypoint provisions and validates this directory.
+MEDIA_STAGING_ROOT = "/staging"
+MEDIA_STAGING_DIRECTORY = "/staging/tmp"
 
 CRLF = b"\r\n"
 
@@ -178,6 +184,14 @@ class MediaStorage:
         self._spam_checker_module_callbacks = hs.get_module_api_callbacks().spam_checker
         self.clock = hs.get_clock()
 
+    @property
+    def deletion_supported(self) -> bool:
+        """Whether every configured durable provider can delete exact files."""
+
+        return (
+            self.local_provider is not None or bool(self.storage_providers)
+        ) and all(provider.supports_deletion for provider in self.storage_providers)
+
     @trace_with_opname("MediaStorage.store_file")
     async def store_file(self, source: IO, file_info: FileInfo) -> str:
         """Write `source` to the on disk media store, and also any other
@@ -200,6 +214,24 @@ class MediaStorage:
     async def write_to_file(self, source: IO, output: IO) -> None:
         """Asynchronously write the `source` to `output`."""
         await defer_to_thread(self.reactor, _write_file_synchronously, source, output)
+
+    def _make_media_temp_file(self, suffix: str = "") -> Any:
+        """Create disposable media space only on the fixed staging mount."""
+
+        staging_root = os.path.realpath(MEDIA_STAGING_ROOT)
+        staging_directory = os.path.realpath(MEDIA_STAGING_DIRECTORY)
+        try:
+            beneath_staging = (
+                os.path.commonpath((staging_root, staging_directory)) == staging_root
+            )
+        except ValueError:
+            beneath_staging = False
+        if not beneath_staging or not os.path.isdir(staging_directory):
+            raise RuntimeError("media staging directory is missing or outside /staging")
+
+        return tempfile.NamedTemporaryFile(
+            dir=staging_directory, suffix=suffix, delete=False
+        )
 
     @trace_with_opname("MediaStorage.store_into_file")
     @contextlib.asynccontextmanager
@@ -238,7 +270,7 @@ class MediaStorage:
         else:
             # No local provider, write to temp file
             is_temp_file = True
-            with tempfile.NamedTemporaryFile(delete=False) as f:
+            with self._make_media_temp_file() as f:
                 media_filepath = f.name
                 yield cast(BinaryIO, f), media_filepath
 
@@ -261,7 +293,11 @@ class MediaStorage:
 
                 for provider in self.storage_providers:
                     with start_active_span(str(provider)):
-                        await provider.store_file(path, file_info)
+                        provider_file_info = attr.evolve(
+                            file_info,
+                            upload_path=media_filepath if is_temp_file else None,
+                        )
+                        await provider.store_file(path, provider_file_info)
 
                 # If using a temp file, delete it after uploading to storage providers
                 if is_temp_file:
@@ -277,6 +313,33 @@ class MediaStorage:
                 pass
 
             raise e from None
+
+    async def delete_files(self, file_infos: Sequence[FileInfo]) -> None:
+        """Delete exact originals/thumbnails from every configured provider.
+
+        Providers are called before local files are removed. A provider failure
+        therefore leaves database metadata untouched so an idempotent retry can
+        finish the operation.
+        """
+
+        if not self.deletion_supported:
+            raise RuntimeError(
+                "configured media providers do not support physical deletion"
+            )
+
+        for file_info in file_infos:
+            path = self._file_info_to_path(file_info)
+            for provider in self.storage_providers:
+                with start_active_span(str(provider)):
+                    await provider.delete(path, file_info)
+
+            if self.local_provider:
+                local_path = os.path.join(self.local_media_directory, path)  # type: ignore[arg-type]
+                try:
+                    os.remove(local_path)
+                except OSError as e:
+                    if e.errno != errno.ENOENT:
+                        raise
 
     async def fetch_media(self, file_info: FileInfo) -> Responder | None:
         """Attempts to fetch media described by file_info from the configured storage providers.
@@ -400,8 +463,8 @@ class MediaStorage:
                 if res:
                     temp_path = None
                     try:
-                        with tempfile.NamedTemporaryFile(
-                            delete=False, suffix=os.path.splitext(path)[1]
+                        with self._make_media_temp_file(
+                            suffix=os.path.splitext(path)[1]
                         ) as tmp:
                             temp_path = tmp.name
                         with res:

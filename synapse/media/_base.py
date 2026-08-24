@@ -534,6 +534,10 @@ class FileInfo:
     url_cache: bool = False
     # Whether the file is a thumbnail or not.
     thumbnail: ThumbnailInfo | None = None
+    # Absolute path of the temporary source used while storing this file.
+    # This is populated only while storage providers are called and is not
+    # persisted or used as part of the canonical media key.
+    upload_path: str | None = None
 
     # The below properties exist to maintain compatibility with third-party modules.
     @property

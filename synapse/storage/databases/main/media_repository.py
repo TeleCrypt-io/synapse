@@ -988,6 +988,39 @@ class MediaRepositoryStore(MediaRepositoryBackgroundUpdateStore):
             "delete_url_cache_media", _delete_url_cache_media_txn
         )
 
+    async def delete_local_media(self, media_ids: Collection[str]) -> None:
+        """Delete local media metadata and all of its thumbnail rows atomically."""
+
+        if len(media_ids) == 0:
+            return
+
+        def _delete_local_media_txn(txn: LoggingTransaction) -> None:
+            self.db_pool.simple_delete_many_txn(
+                txn,
+                table="local_media_repository_url_cache",
+                column="media_id",
+                values=media_ids,
+                keyvalues={},
+            )
+            self.db_pool.simple_delete_many_txn(
+                txn,
+                table="local_media_repository_thumbnails",
+                column="media_id",
+                values=media_ids,
+                keyvalues={},
+            )
+            self.db_pool.simple_delete_many_txn(
+                txn,
+                table="local_media_repository",
+                column="media_id",
+                values=media_ids,
+                keyvalues={},
+            )
+
+        await self.db_pool.runInteraction(
+            "delete_local_media", _delete_local_media_txn
+        )
+
     async def get_is_hash_quarantined(self, sha256: str) -> bool:
         """Get whether a specific sha256 hash digest matches any quarantined media.
 

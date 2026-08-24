@@ -22,7 +22,7 @@
 
 import logging
 import re
-from typing import IO, TYPE_CHECKING
+from typing import IO, TYPE_CHECKING, AsyncContextManager
 
 from synapse.api.errors import Codes, SynapseError
 from synapse.http.server import respond_with_json
@@ -53,6 +53,11 @@ class BaseUploadServlet(RestServlet):
         self._media_repository_callbacks = (
             hs.get_module_api_callbacks().media_repository
         )
+
+    def _user_upload_lock(self, user_id: str) -> AsyncContextManager[None]:
+        """Return the shared in-process lock for one user's upload path."""
+
+        return self.media_repo.local_media_upload_linearizer.queue(user_id)
 
     async def _get_file_metadata(
         self, request: SynapseRequest, user_id: str
@@ -114,19 +119,20 @@ class UploadServlet(BaseUploadServlet):
 
     async def on_POST(self, request: SynapseRequest) -> None:
         requester = await self.auth.get_user_by_req(request)
-        content_length, upload_name, media_type = await self._get_file_metadata(
-            request, requester.user.to_string()
-        )
-
-        try:
-            content: IO = request.content  # type: ignore
-            content_uri = await self.media_repo.create_or_update_content(
-                media_type, upload_name, content, content_length, requester.user
+        async with self._user_upload_lock(requester.user.to_string()):
+            content_length, upload_name, media_type = await self._get_file_metadata(
+                request, requester.user.to_string()
             )
-        except SpamMediaException:
-            # For uploading of media we want to respond with a 400, instead of
-            # the default 404, as that would just be confusing.
-            raise SynapseError(400, "Bad content")
+
+            try:
+                content: IO = request.content  # type: ignore
+                content_uri = await self.media_repo.create_or_update_content(
+                    media_type, upload_name, content, content_length, requester.user
+                )
+            except SpamMediaException:
+                # For uploading of media we want to respond with a 400, instead of
+                # the default 404, as that would just be confusing.
+                raise SynapseError(400, "Bad content")
 
         logger.info("Uploaded content with URI '%s'", content_uri)
 
@@ -164,24 +170,25 @@ class AsyncUploadServlet(BaseUploadServlet):
 
         async with lock:
             await self.media_repo.verify_can_upload(media_id, requester.user)
-            content_length, upload_name, media_type = await self._get_file_metadata(
-                request, requester.user.to_string()
-            )
-
-            try:
-                content: IO = request.content  # type: ignore
-                await self.media_repo.create_or_update_content(
-                    media_type,
-                    upload_name,
-                    content,
-                    content_length,
-                    requester.user,
-                    media_id=media_id,
+            async with self._user_upload_lock(requester.user.to_string()):
+                content_length, upload_name, media_type = await self._get_file_metadata(
+                    request, requester.user.to_string()
                 )
-            except SpamMediaException:
-                # For uploading of media we want to respond with a 400, instead of
-                # the default 404, as that would just be confusing.
-                raise SynapseError(400, "Bad content")
+
+                try:
+                    content: IO = request.content  # type: ignore
+                    await self.media_repo.create_or_update_content(
+                        media_type,
+                        upload_name,
+                        content,
+                        content_length,
+                        requester.user,
+                        media_id=media_id,
+                    )
+                except SpamMediaException:
+                    # For uploading of media we want to respond with a 400, instead of
+                    # the default 404, as that would just be confusing.
+                    raise SynapseError(400, "Bad content")
 
             logger.info("Uploaded content for media ID %r", media_id)
             respond_with_json(request, 200, {}, send_cors=True)

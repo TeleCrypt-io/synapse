@@ -51,6 +51,7 @@ from synapse.media._base import (
 from synapse.media.media_repository import MediaRepository
 from synapse.media.media_storage import MediaStorage
 from synapse.media.thumbnailer import ANIMATED_THUMBNAIL_TYPE, ThumbnailProvider
+from synapse.rest.client.telecrypt_storage import TelecryptDeleteMediaServlet
 from synapse.server import HomeServer
 from synapse.util.stringutils import parse_and_validate_server_name
 
@@ -331,3 +332,4 @@ def register_servlets(hs: "HomeServer", http_server: HttpServer) -> None:
     MediaConfigResource(hs).register(http_server)
     ThumbnailResource(hs, media_repo, media_repo.media_storage).register(http_server)
     DownloadResource(hs, media_repo).register(http_server)
+    TelecryptDeleteMediaServlet(hs).register(http_server)

@@ -45,11 +45,12 @@ from synapse.events import EventBase
 from synapse.http.client import ByteWriteable
 from synapse.http.types import QueryParams
 from synapse.logging.context import make_deferred_yieldable
-from synapse.media._base import FileInfo, ThumbnailInfo
+from synapse.media._base import FileInfo, Responder, ThumbnailInfo
 from synapse.media.filepath import MediaFilePaths
 from synapse.media.media_storage import MediaStorage, ReadableFileWrapper
 from synapse.media.storage_provider import (
     FileStorageProviderBackend,
+    StorageProvider,
     StorageProviderWrapper,
 )
 from synapse.media.thumbnailer import (
@@ -70,6 +71,28 @@ from tests.server import FakeChannel
 from tests.test_utils import SMALL_CMYK_JPEG, SMALL_PNG, SMALL_PNG_SHA256
 from tests.unittest import override_config
 from tests.utils import default_config
+
+
+class RecordingStorageProvider(StorageProvider):
+    def __init__(self) -> None:
+        self.upload_path: str | None = None
+        self.uploaded_bytes: bytes | None = None
+
+    @property
+    def supports_deletion(self) -> bool:
+        return True
+
+    async def store_file(self, path: str, file_info: FileInfo) -> None:
+        self.upload_path = file_info.upload_path
+        assert self.upload_path is not None
+        with open(self.upload_path, "rb") as source:
+            self.uploaded_bytes = source.read()
+
+    async def fetch(self, path: str, file_info: FileInfo) -> Responder | None:
+        return None
+
+    async def delete(self, path: str, file_info: FileInfo) -> None:
+        return None
 
 
 class MediaStorageTests(unittest.HomeserverTestCase):
@@ -137,6 +160,44 @@ class MediaStorageTests(unittest.HomeserverTestCase):
         # This uses a real blocking threadpool so we have to wait for it to be
         # actually done :/
         self.get_success(test_ensure_media())
+
+    def test_provider_receives_temporary_source_when_local_storage_is_disabled(
+        self,
+    ) -> None:
+        recording_provider = RecordingStorageProvider()
+        media_storage = MediaStorage(
+            self.hs,
+            MediaFilePaths(self.test_dir),
+            [
+                StorageProviderWrapper(
+                    recording_provider,
+                    store_local=True,
+                    store_remote=True,
+                    store_synchronous=True,
+                )
+            ],
+            local_provider=None,
+        )
+
+        with patch(
+            "synapse.media.media_storage.MEDIA_STAGING_ROOT", self.test_dir
+        ), patch(
+            "synapse.media.media_storage.MEDIA_STAGING_DIRECTORY", self.test_dir
+        ):
+            self.get_success(
+                media_storage.store_file(
+                    BytesIO(b"temporary source"), FileInfo(None, "media")
+                )
+            )
+
+        self.assertEqual(recording_provider.uploaded_bytes, b"temporary source")
+        self.assertIsNotNone(recording_provider.upload_path)
+        assert recording_provider.upload_path is not None
+        self.assertEqual(
+            os.path.commonpath((self.test_dir, recording_provider.upload_path)),
+            self.test_dir,
+        )
+        self.assertFalse(os.path.exists(recording_provider.upload_path))
 
 
 @attr.s(auto_attribs=True, slots=True, frozen=True)

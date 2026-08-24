@@ -20,6 +20,7 @@
 #
 
 import abc
+import errno
 import logging
 import os
 import shutil
@@ -66,6 +67,22 @@ class StorageProvider(metaclass=abc.ABCMeta):
             Returns a Responder if the provider has the file, otherwise returns None.
         """
 
+    @property
+    def supports_deletion(self) -> bool:
+        """Whether this provider implements the optional deletion hook."""
+
+        return False
+
+    async def delete(self, path: str, file_info: FileInfo) -> None:
+        """Delete the file if this provider supports physical deletion.
+
+        This optional hook deliberately remains non-abstract so existing
+        third-party providers remain loadable. A caller that requires physical
+        deletion must check ``supports_deletion`` before invoking it.
+        """
+
+        raise NotImplementedError("storage provider does not support deletion")
+
 
 class StorageProviderWrapper(StorageProvider):
     """Wraps a storage provider and provides various config options
@@ -93,6 +110,10 @@ class StorageProviderWrapper(StorageProvider):
     def __str__(self) -> str:
         return "StorageProviderWrapper[%s]" % (self.backend,)
 
+    @property
+    def supports_deletion(self) -> bool:
+        return bool(getattr(self.backend, "supports_deletion", False))
+
     @trace_with_opname("StorageProviderWrapper.store_file")
     async def store_file(self, path: str, file_info: FileInfo) -> None:
         if not file_info.server_name and not self.store_local:
@@ -105,6 +126,11 @@ class StorageProviderWrapper(StorageProvider):
             # The URL preview cache is short lived and not worth offloading or
             # backing up.
             return None
+
+        if file_info.upload_path and not self.store_synchronous:
+            raise RuntimeError(
+                "temporary media sources require synchronous storage providers"
+            )
 
         if self.store_synchronous:
             # store_file is supposed to return an Awaitable, but guard
@@ -133,6 +159,13 @@ class StorageProviderWrapper(StorageProvider):
         # against improper implementations.
         return await maybe_awaitable(self.backend.fetch(path, file_info))
 
+    @trace_with_opname("StorageProviderWrapper.delete")
+    async def delete(self, path: str, file_info: FileInfo) -> None:
+        delete = getattr(self.backend, "delete", None)
+        if delete is None:
+            raise NotImplementedError("storage provider does not support deletion")
+        await maybe_awaitable(delete(path, file_info))
+
 
 class FileStorageProviderBackend(StorageProvider):
     """A storage provider that stores files in a directory on a filesystem.
@@ -150,6 +183,10 @@ class FileStorageProviderBackend(StorageProvider):
 
     def __str__(self) -> str:
         return "FileStorageProviderBackend[%s]" % (self.base_directory,)
+
+    @property
+    def supports_deletion(self) -> bool:
+        return True
 
     @trace_with_opname("FileStorageProviderBackend.store_file")
     async def store_file(self, path: str, file_info: FileInfo) -> None:
@@ -183,6 +220,14 @@ class FileStorageProviderBackend(StorageProvider):
             return FileResponder(self.hs, open(backup_fname, "rb"))
 
         return None
+
+    async def delete(self, path: str, file_info: FileInfo) -> None:
+        backup_fname = os.path.join(self.base_directory, path)
+        try:
+            os.remove(backup_fname)
+        except OSError as e:
+            if e.errno != errno.ENOENT:
+                raise
 
     @staticmethod
     def parse_config(config: dict) -> str:

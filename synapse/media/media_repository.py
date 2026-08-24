@@ -117,7 +117,11 @@ class MediaRepository:
         self.thumbnail_requirements = hs.config.media.thumbnail_requirements
 
         self.remote_media_linearizer = Linearizer(name="media_remote", clock=self.clock)
-
+        # Shared by both HTTP upload resources. The resources acquire this
+        # lock before admission callbacks and hold it through the media commit.
+        self.local_media_upload_linearizer = Linearizer(
+            name="media_local_upload", clock=self.clock
+        )
         self.recently_accessed_remotes: set[tuple[str, str]] = set()
         self.recently_accessed_locals: set[str] = set()
 
@@ -327,6 +331,9 @@ class MediaRepository:
         media_id: str | None = None,
     ) -> MXCUri:
         """Create or update the content of the given media ID.
+
+        HTTP upload resources hold ``local_media_upload_linearizer`` before
+        running admission callbacks and call this method while holding it.
 
         Args:
             media_type: The content type of the file.

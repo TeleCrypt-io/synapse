@@ -4,7 +4,6 @@ name: Build docker images
 
 on:
   push:
-    tags: ["v*"]
     branches: [master, main, develop]
   workflow_dispatch:
 

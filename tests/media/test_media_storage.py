@@ -18,6 +18,7 @@
 # [This file includes modifications made by New Vector Limited]
 #
 #
+import errno
 import os
 import shutil
 import tempfile
@@ -93,6 +94,40 @@ class RecordingStorageProvider(StorageProvider):
 
     async def delete(self, path: str, file_info: FileInfo) -> None:
         return None
+
+
+class DeletionRecordingStorageProvider(StorageProvider):
+    """A provider whose deletion calls can observe the local media file."""
+
+    def __init__(
+        self,
+        local_base_path: str,
+        supports_deletion: bool = True,
+        failure: Exception | None = None,
+    ) -> None:
+        self.local_base_path = local_base_path
+        self._supports_deletion = supports_deletion
+        self.failure = failure
+        self.delete_paths: list[str] = []
+        self.provider_saw_local: list[bool] = []
+
+    @property
+    def supports_deletion(self) -> bool:
+        return self._supports_deletion
+
+    async def store_file(self, path: str, file_info: FileInfo) -> None:
+        pass
+
+    async def fetch(self, path: str, file_info: FileInfo) -> Responder | None:
+        return None
+
+    async def delete(self, path: str, file_info: FileInfo) -> None:
+        self.delete_paths.append(path)
+        self.provider_saw_local.append(
+            os.path.exists(os.path.join(self.local_base_path, path))
+        )
+        if self.failure is not None:
+            raise self.failure
 
 
 class MediaStorageTests(unittest.HomeserverTestCase):
@@ -247,6 +282,88 @@ class MediaStorageTests(unittest.HomeserverTestCase):
         self.assertIsNotNone(recording_provider.upload_path)
         assert recording_provider.upload_path is not None
         self.assertTrue(os.path.exists(recording_provider.upload_path))
+
+    def _local_file_for_deletion(self) -> tuple[FileInfo, str, str]:
+        file_info = FileInfo(None, "media-to-delete")
+        path = self.media_storage._file_info_to_path(file_info)
+        local_path = os.path.join(self.primary_base_path, path)
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        with open(local_path, "wb") as local_file:
+            local_file.write(b"local media")
+        return file_info, path, local_path
+
+    def _media_storage_with_deletion_provider(
+        self, provider: StorageProvider
+    ) -> MediaStorage:
+        return MediaStorage(
+            self.hs,
+            self.filepaths,
+            [
+                StorageProviderWrapper(
+                    provider,
+                    store_local=True,
+                    store_remote=True,
+                    store_synchronous=True,
+                )
+            ],
+            self.media_storage.local_provider,
+        )
+
+    def test_delete_files_calls_providers_before_local_files(self) -> None:
+        file_info, path, local_path = self._local_file_for_deletion()
+        provider = DeletionRecordingStorageProvider(self.primary_base_path)
+        media_storage = self._media_storage_with_deletion_provider(provider)
+
+        self.get_success(media_storage.delete_files([file_info]))
+
+        self.assertEqual(provider.delete_paths, [path])
+        self.assertEqual(provider.provider_saw_local, [True])
+        self.assertFalse(os.path.exists(local_path))
+
+    def test_delete_files_preserves_local_file_when_provider_fails(self) -> None:
+        file_info, path, local_path = self._local_file_for_deletion()
+        provider = DeletionRecordingStorageProvider(
+            self.primary_base_path, failure=RuntimeError("provider failure")
+        )
+        media_storage = self._media_storage_with_deletion_provider(provider)
+
+        self.get_failure(media_storage.delete_files([file_info]), RuntimeError)
+
+        self.assertEqual(provider.delete_paths, [path])
+        self.assertEqual(provider.provider_saw_local, [True])
+        self.assertTrue(os.path.exists(local_path))
+        with open(local_path, "rb") as local_file:
+            self.assertEqual(local_file.read(), b"local media")
+
+    def test_delete_files_fails_closed_for_unsupported_provider(self) -> None:
+        file_info, _, local_path = self._local_file_for_deletion()
+        provider = DeletionRecordingStorageProvider(
+            self.primary_base_path, supports_deletion=False
+        )
+        media_storage = self._media_storage_with_deletion_provider(provider)
+
+        self.get_failure(media_storage.delete_files([file_info]), RuntimeError)
+
+        self.assertEqual(provider.delete_paths, [])
+        self.assertEqual(provider.provider_saw_local, [])
+        self.assertTrue(os.path.exists(local_path))
+
+    def test_delete_files_tolerates_missing_local_file(self) -> None:
+        file_info = FileInfo(None, "media-without-local-file")
+        path = self.media_storage._file_info_to_path(file_info)
+        local_path = os.path.join(self.primary_base_path, path)
+        provider = DeletionRecordingStorageProvider(self.primary_base_path)
+        media_storage = self._media_storage_with_deletion_provider(provider)
+
+        with patch(
+            "synapse.media.media_storage.os.remove",
+            side_effect=FileNotFoundError(errno.ENOENT, "local file is absent"),
+        ) as remove:
+            self.get_success(media_storage.delete_files([file_info]))
+
+        remove.assert_called_once_with(local_path)
+        self.assertEqual(provider.delete_paths, [path])
+        self.assertEqual(provider.provider_saw_local, [False])
 
 
 @attr.s(auto_attribs=True, slots=True, frozen=True)

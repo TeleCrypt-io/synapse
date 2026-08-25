@@ -21,7 +21,7 @@ from io import BytesIO
 from twisted.internet import defer
 from twisted.trial import unittest
 
-from synapse.api.errors import Codes, SynapseError
+from synapse.api.errors import Codes, NotFoundError, SynapseError
 from synapse.media._base import FileInfo, ThumbnailInfo
 from synapse.rest.client.telecrypt_storage import (
     TelecryptDeleteMediaServlet,
@@ -124,10 +124,16 @@ class _FakeStore:
         events: list[str],
         media=None,
         thumbnails: list[ThumbnailInfo] | None = None,
+        media_by_id=None,
+        metadata_failure: Exception | None = None,
     ):
         self.lock = lock
         self.events = events
         self.thumbnails = thumbnails or []
+        self.media_by_id = media_by_id
+        self.metadata_failure = metadata_failure
+        self.metadata_attempts = []
+        self.deleted_media_ids = []
         self.media = media or type(
             "Media",
             (),
@@ -137,6 +143,8 @@ class _FakeStore:
     async def get_local_media(self, media_id: str):
         assert self.lock.active
         self.events.append("lookup")
+        if self.media_by_id is not None:
+            return self.media_by_id.get(media_id)
         return self.media
 
     async def get_local_media_thumbnails(self, media_id: str):
@@ -145,20 +153,34 @@ class _FakeStore:
 
     async def delete_local_media(self, media_ids):
         assert self.lock.active
+        self.metadata_attempts.append(list(media_ids))
+        if self.metadata_failure is not None:
+            raise self.metadata_failure
+        self.deleted_media_ids.append(list(media_ids))
         self.events.append("metadata-delete")
 
 
 class _FakeStorage:
-    def __init__(self, lock: _FakeLock, events: list[str]):
+    def __init__(
+        self,
+        lock: _FakeLock,
+        events: list[str],
+        failure: Exception | None = None,
+    ):
         self.lock = lock
         self.events = events
+        self.failure = failure
         self.file_infos: list[FileInfo] = []
+        self.delete_calls = []
 
     async def delete_files(self, file_infos: list[FileInfo]) -> None:
         assert self.lock.active
         self.file_infos = file_infos
+        self.delete_calls.append(file_infos)
         assert len(file_infos) == 6
         self.events.append("physical-delete")
+        if self.failure is not None:
+            raise self.failure
 
 
 class _FakeMediaRepository:
@@ -289,6 +311,144 @@ class TelecryptStorageValidationTests(unittest.TestCase):
                 (320, 240, "scale"),
                 (640, 480, "scale"),
                 (800, 600, "scale"),
+            ],
+        )
+
+    @defer.inlineCallbacks
+    def test_delete_rejects_foreign_media_without_mutation(self) -> None:
+        events: list[str] = []
+        lock = _FakeLock(events)
+        storage = _FakeStorage(lock, events)
+        owned_media = type(
+            "Media",
+            (),
+            {"user_id": "@owner:example.com", "url_cache": None},
+        )()
+        foreign_media = type(
+            "Media",
+            (),
+            {"user_id": "@other:example.com", "url_cache": None},
+        )()
+        store = _FakeStore(
+            lock,
+            events,
+            thumbnails=_frozen_thumbnails(),
+            media_by_id={"owned": owned_media, "foreign": foreign_media},
+        )
+        servlet = TelecryptDeleteMediaServlet.__new__(TelecryptDeleteMediaServlet)
+        servlet.auth = _FakeAuth()
+        servlet.store = store
+        servlet.media_repo = _FakeMediaRepository(lock, storage)
+        servlet.media_storage = storage
+        servlet.hs = _FakeHomeServer()
+
+        body = json.dumps(
+            {
+                "media_ids": [
+                    "mxc://example.com/owned",
+                    "mxc://example.com/foreign",
+                ]
+            }
+        ).encode()
+        request = _FakeRequest(body, content_length=str(len(body)))
+        error = yield self.assertFailure(
+            defer.ensureDeferred(servlet.on_POST(request)), NotFoundError
+        )
+
+        self.assertEqual(error.code, 404)
+        self.assertEqual(
+            events,
+            ["lock-enter", "lookup", "lookup", "lock-exit"],
+        )
+        self.assertEqual(storage.delete_calls, [])
+        self.assertEqual(store.metadata_attempts, [])
+        self.assertEqual(store.deleted_media_ids, [])
+
+    @defer.inlineCallbacks
+    def test_provider_failure_returns_502_without_metadata_mutation(self) -> None:
+        events: list[str] = []
+        lock = _FakeLock(events)
+        storage = _FakeStorage(
+            lock,
+            events,
+            failure=RuntimeError("provider failure"),
+        )
+        store = _FakeStore(
+            lock,
+            events,
+            thumbnails=_frozen_thumbnails(),
+        )
+        servlet = TelecryptDeleteMediaServlet.__new__(TelecryptDeleteMediaServlet)
+        servlet.auth = _FakeAuth()
+        servlet.store = store
+        servlet.media_repo = _FakeMediaRepository(lock, storage)
+        servlet.media_storage = storage
+        servlet.hs = _FakeHomeServer()
+
+        body = json.dumps({"media_ids": ["mxc://example.com/file"]}).encode()
+        request = _FakeRequest(body, content_length=str(len(body)))
+        error = yield self.assertFailure(
+            defer.ensureDeferred(servlet.on_POST(request)), SynapseError
+        )
+
+        self.assertEqual(error.code, 502)
+        self.assertEqual(error.errcode, Codes.UNKNOWN)
+        self.assertEqual(
+            events,
+            ["lock-enter", "lookup", "physical-delete", "lock-exit"],
+        )
+        self.assertEqual(len(storage.delete_calls), 1)
+        self.assertEqual(store.metadata_attempts, [])
+        self.assertEqual(store.deleted_media_ids, [])
+
+    @defer.inlineCallbacks
+    def test_database_failure_after_provider_delete_is_retryable(self) -> None:
+        events: list[str] = []
+        lock = _FakeLock(events)
+        storage = _FakeStorage(lock, events)
+        store = _FakeStore(
+            lock,
+            events,
+            thumbnails=_frozen_thumbnails(),
+            metadata_failure=RuntimeError("database failure"),
+        )
+        servlet = TelecryptDeleteMediaServlet.__new__(TelecryptDeleteMediaServlet)
+        servlet.auth = _FakeAuth()
+        servlet.store = store
+        servlet.media_repo = _FakeMediaRepository(lock, storage)
+        servlet.media_storage = storage
+        servlet.hs = _FakeHomeServer()
+
+        body = json.dumps({"media_ids": ["mxc://example.com/file"]}).encode()
+        request = _FakeRequest(body, content_length=str(len(body)))
+        yield self.assertFailure(
+            defer.ensureDeferred(servlet.on_POST(request)), RuntimeError
+        )
+
+        self.assertEqual(len(storage.delete_calls), 1)
+        self.assertEqual(store.metadata_attempts, [["file"]])
+        self.assertEqual(store.deleted_media_ids, [])
+
+        store.metadata_failure = None
+        retry_request = _FakeRequest(body, content_length=str(len(body)))
+        result = yield defer.ensureDeferred(servlet.on_POST(retry_request))
+
+        self.assertEqual(result[0], 204)
+        self.assertEqual(len(storage.delete_calls), 2)
+        self.assertEqual(store.metadata_attempts, [["file"], ["file"]])
+        self.assertEqual(store.deleted_media_ids, [["file"]])
+        self.assertEqual(
+            events,
+            [
+                "lock-enter",
+                "lookup",
+                "physical-delete",
+                "lock-exit",
+                "lock-enter",
+                "lookup",
+                "physical-delete",
+                "metadata-delete",
+                "lock-exit",
             ],
         )
 

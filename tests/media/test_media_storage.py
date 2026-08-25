@@ -320,6 +320,64 @@ class MediaStorageTests(unittest.HomeserverTestCase):
         self.assertEqual(provider.provider_saw_local, [True])
         self.assertFalse(os.path.exists(local_path))
 
+    def test_delete_files_uses_canonical_original_and_thumbnail_paths(self) -> None:
+        media_id = "abcdef"
+        remote_server = "remote.example"
+        thumbnails = [
+            ThumbnailInfo(32, 32, "crop", "image/png", 10),
+            ThumbnailInfo(96, 96, "crop", "image/png", 20),
+            ThumbnailInfo(320, 240, "scale", "image/png", 30),
+            ThumbnailInfo(640, 480, "scale", "image/png", 40),
+            ThumbnailInfo(800, 600, "scale", "image/png", 50),
+        ]
+        file_infos = [
+            FileInfo(None, media_id),
+            *(FileInfo(None, media_id, thumbnail=thumbnail) for thumbnail in thumbnails),
+            FileInfo(remote_server, media_id),
+            FileInfo(remote_server, media_id, thumbnail=thumbnails[0]),
+        ]
+        expected_paths = [
+            self.filepaths.local_media_filepath_rel(media_id),
+            *[
+                self.filepaths.local_media_thumbnail_rel(
+                    media_id,
+                    thumbnail.width,
+                    thumbnail.height,
+                    thumbnail.type,
+                    thumbnail.method,
+                )
+                for thumbnail in thumbnails
+            ],
+            self.filepaths.remote_media_filepath_rel(remote_server, media_id),
+            self.filepaths.remote_media_thumbnail_rel(
+                remote_server,
+                media_id,
+                thumbnails[0].width,
+                thumbnails[0].height,
+                thumbnails[0].type,
+                thumbnails[0].method,
+            ),
+        ]
+        for path in expected_paths:
+            local_path = os.path.join(self.primary_base_path, path)
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            with open(local_path, "wb") as local_file:
+                local_file.write(b"local media")
+
+        provider = DeletionRecordingStorageProvider(self.primary_base_path)
+        media_storage = self._media_storage_with_deletion_provider(provider)
+
+        self.get_success(media_storage.delete_files(file_infos))
+
+        self.assertEqual(provider.delete_paths, expected_paths)
+        self.assertEqual(provider.provider_saw_local, [True] * len(expected_paths))
+        self.assertTrue(
+            all(
+                not os.path.exists(os.path.join(self.primary_base_path, path))
+                for path in expected_paths
+            )
+        )
+
     def test_delete_files_preserves_local_file_when_provider_fails(self) -> None:
         file_info, path, local_path = self._local_file_for_deletion()
         provider = DeletionRecordingStorageProvider(

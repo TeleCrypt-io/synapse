@@ -21,7 +21,7 @@ from io import BytesIO
 from twisted.internet import defer
 from twisted.trial import unittest
 
-from synapse.api.errors import SynapseError
+from synapse.api.errors import Codes, SynapseError
 from synapse.media._base import FileInfo, ThumbnailInfo
 from synapse.rest.client.telecrypt_storage import (
     TelecryptDeleteMediaServlet,
@@ -78,18 +78,19 @@ class _FakeLock:
 
 
 class _FakeStore:
-    def __init__(self, lock: _FakeLock, events: list[str]):
+    def __init__(self, lock: _FakeLock, events: list[str], media=None):
         self.lock = lock
         self.events = events
-
-    async def get_local_media(self, media_id: str):
-        assert self.lock.active
-        self.events.append("lookup")
-        return type(
+        self.media = media or type(
             "Media",
             (),
             {"user_id": "@owner:example.com", "url_cache": None},
         )()
+
+    async def get_local_media(self, media_id: str):
+        assert self.lock.active
+        self.events.append("lookup")
+        return self.media
 
     async def get_local_media_thumbnails(self, media_id: str):
         assert self.lock.active
@@ -216,3 +217,30 @@ class TelecryptStorageValidationTests(unittest.TestCase):
                 "lock-exit",
             ],
         )
+
+    @defer.inlineCallbacks
+    def test_delete_rejects_url_cache_before_owner_lookup(self) -> None:
+        events: list[str] = []
+        lock = _FakeLock(events)
+        storage = _FakeStorage(lock, events)
+        url_cache_media = type(
+            "Media",
+            (),
+            {"user_id": None, "url_cache": "https://example.invalid/image"},
+        )()
+        servlet = TelecryptDeleteMediaServlet.__new__(TelecryptDeleteMediaServlet)
+        servlet.auth = _FakeAuth()
+        servlet.store = _FakeStore(lock, events, url_cache_media)
+        servlet.media_repo = _FakeMediaRepository(lock, storage)
+        servlet.media_storage = storage
+        servlet.hs = _FakeHomeServer()
+
+        body = json.dumps({"media_ids": ["mxc://example.com/cache"]}).encode()
+        request = _FakeRequest(body, content_length=str(len(body)))
+        error = yield self.assertFailure(
+            defer.ensureDeferred(servlet.on_POST(request)), SynapseError
+        )
+
+        self.assertEqual(error.code, 400)
+        self.assertEqual(error.errcode, Codes.INVALID_PARAM)
+        self.assertEqual(events, ["lock-enter", "lookup", "lock-exit"])

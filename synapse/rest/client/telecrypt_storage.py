@@ -193,14 +193,14 @@ class TelecryptDeleteMediaServlet(RestServlet):
                 media = await self.store.get_local_media(media_id)
                 if media is None:
                     continue
-                if media.user_id != user_id:
-                    raise NotFoundError("Media not found")
                 if media.url_cache:
                     raise SynapseError(
                         HTTPStatus.BAD_REQUEST,
                         "URL-cache media cannot be deleted by this endpoint",
                         Codes.INVALID_PARAM,
                     )
+                if media.user_id != user_id:
+                    raise NotFoundError("Media not found")
 
                 thumbnails = await self.store.get_local_media_thumbnails(media_id)
                 file_infos.extend(build_media_file_infos(media_id, thumbnails))

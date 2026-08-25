@@ -31,6 +31,46 @@ from synapse.rest.client.telecrypt_storage import (
 )
 
 
+def _frozen_thumbnails() -> list[ThumbnailInfo]:
+    return [
+        ThumbnailInfo(
+            width=32,
+            height=32,
+            method="crop",
+            type="image/png",
+            length=10,
+        ),
+        ThumbnailInfo(
+            width=96,
+            height=96,
+            method="crop",
+            type="image/png",
+            length=20,
+        ),
+        ThumbnailInfo(
+            width=320,
+            height=240,
+            method="scale",
+            type="image/png",
+            length=30,
+        ),
+        ThumbnailInfo(
+            width=640,
+            height=480,
+            method="scale",
+            type="image/png",
+            length=40,
+        ),
+        ThumbnailInfo(
+            width=800,
+            height=600,
+            method="scale",
+            type="image/png",
+            length=50,
+        ),
+    ]
+
+
 class _FakeHomeServer:
     def is_mine_server_name(self, server_name: str) -> bool:
         return server_name == "example.com"
@@ -78,9 +118,16 @@ class _FakeLock:
 
 
 class _FakeStore:
-    def __init__(self, lock: _FakeLock, events: list[str], media=None):
+    def __init__(
+        self,
+        lock: _FakeLock,
+        events: list[str],
+        media=None,
+        thumbnails: list[ThumbnailInfo] | None = None,
+    ):
         self.lock = lock
         self.events = events
+        self.thumbnails = thumbnails or []
         self.media = media or type(
             "Media",
             (),
@@ -94,7 +141,7 @@ class _FakeStore:
 
     async def get_local_media_thumbnails(self, media_id: str):
         assert self.lock.active
-        return []
+        return self.thumbnails
 
     async def delete_local_media(self, media_ids):
         assert self.lock.active
@@ -105,10 +152,12 @@ class _FakeStorage:
     def __init__(self, lock: _FakeLock, events: list[str]):
         self.lock = lock
         self.events = events
+        self.file_infos: list[FileInfo] = []
 
     async def delete_files(self, file_infos: list[FileInfo]) -> None:
         assert self.lock.active
-        assert len(file_infos) == 1
+        self.file_infos = file_infos
+        assert len(file_infos) == 6
         self.events.append("physical-delete")
 
 
@@ -152,24 +201,25 @@ class TelecryptStorageValidationTests(unittest.TestCase):
             )
 
     def test_resolves_original_and_all_thumbnail_keys(self) -> None:
-        infos = build_media_file_infos(
-            "file",
-            [
-                ThumbnailInfo(
-                    width=64,
-                    height=64,
-                    method="scale",
-                    type="image/png",
-                    length=10,
-                )
-            ],
-        )
+        infos = build_media_file_infos("file", _frozen_thumbnails())
 
-        self.assertEqual(len(infos), 2)
+        self.assertEqual(len(infos), 6)
         self.assertEqual(infos[0].file_id, "file")
         self.assertIsNone(infos[0].thumbnail)
         self.assertEqual(infos[1].file_id, "file")
-        self.assertEqual(infos[1].thumbnail.width, 64)
+        self.assertEqual(
+            [
+                (info.thumbnail.width, info.thumbnail.height, info.thumbnail.method)
+                for info in infos[1:]
+            ],
+            [
+                (32, 32, "crop"),
+                (96, 96, "crop"),
+                (320, 240, "scale"),
+                (640, 480, "scale"),
+                (800, 600, "scale"),
+            ],
+        )
 
     def test_rejects_oversized_delete_request_body(self) -> None:
         with self.assertRaises(SynapseError):
@@ -197,7 +247,11 @@ class TelecryptStorageValidationTests(unittest.TestCase):
         storage = _FakeStorage(lock, events)
         servlet = TelecryptDeleteMediaServlet.__new__(TelecryptDeleteMediaServlet)
         servlet.auth = _FakeAuth()
-        servlet.store = _FakeStore(lock, events)
+        servlet.store = _FakeStore(
+            lock,
+            events,
+            thumbnails=_frozen_thumbnails(),
+        )
         servlet.media_repo = _FakeMediaRepository(lock, storage)
         servlet.media_storage = storage
         servlet.hs = _FakeHomeServer()
@@ -215,6 +269,26 @@ class TelecryptStorageValidationTests(unittest.TestCase):
                 "physical-delete",
                 "metadata-delete",
                 "lock-exit",
+            ],
+        )
+        self.assertEqual(
+            [
+                None
+                if info.thumbnail is None
+                else (
+                    info.thumbnail.width,
+                    info.thumbnail.height,
+                    info.thumbnail.method,
+                )
+                for info in storage.file_infos
+            ],
+            [
+                None,
+                (32, 32, "crop"),
+                (96, 96, "crop"),
+                (320, 240, "scale"),
+                (640, 480, "scale"),
+                (800, 600, "scale"),
             ],
         )
 

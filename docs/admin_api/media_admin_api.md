@@ -342,6 +342,8 @@ You can find details of how to delete multiple media uploaded by a user in
 # Purge Remote Media API
 
 The purge remote media API allows server admins to purge old cached remote media.
+When configured, storage providers are also asked to delete their copies of the
+media. Providers that do not support deletion are unaffected.
 
 The API is:
 

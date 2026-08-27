@@ -2164,6 +2164,13 @@ Options for each entry include:
 
 * `store_synchronous` (boolean): Whether to wait for successful storage for local uploads.
 
+Storage provider modules may optionally implement a deletion hook. When stored
+media is deleted, Synapse calls this hook for local or remote media according to the
+`store_local` and `store_remote` settings. Modules that do not implement the hook
+remain compatible, but their stored copies are unaffected. If a provider reports
+a deletion failure, Synapse keeps the media metadata so the operation can be
+retried.
+
 * `config` (object): Sets a path to the resource through the `directory` option.
 
   This setting has the following sub-options:

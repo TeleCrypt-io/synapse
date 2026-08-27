@@ -263,7 +263,9 @@ class MediaStorageTests(unittest.HomeserverTestCase):
 
             provider_backend.delete_calls = []
             provider_backend.local_files_at_delete = []
-            self.get_success(storage.remove_file(file_info))
+            removal = defer.ensureDeferred(storage.remove_file(file_info))
+            self.wait_on_thread(removal)
+            self.get_success(removal)
 
             self.assertEqual(provider_backend.delete_calls, paths)
             self.assertEqual(

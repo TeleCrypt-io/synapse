@@ -188,10 +188,13 @@ class MediaStorage:
     def deletion_supported(self) -> bool:
         """Whether local media can be deleted from every affected provider."""
 
-        return all(
-            provider.supports_deletion
+        local_providers = [
+            provider
             for provider in self.storage_providers
             if getattr(provider, "store_local", True)
+        ]
+        return bool(self.local_provider or local_providers) and all(
+            provider.supports_deletion for provider in local_providers
         )
 
     @trace_with_opname("MediaStorage.store_file")
@@ -384,7 +387,8 @@ class MediaStorage:
             if self.local_provider:
                 for path in paths:
                     local_path = os.path.join(
-                        self.local_media_directory, path  # type: ignore[arg-type]
+                        self.local_media_directory,
+                        path,  # type: ignore[arg-type]
                     )
                     if os.path.isfile(local_path):
                         # Import here to avoid circular import
@@ -437,14 +441,16 @@ class MediaStorage:
         if self.local_provider:
             for path in paths:
                 local_path = os.path.join(
-                    self.local_media_directory, path  # type: ignore[arg-type]
+                    self.local_media_directory,
+                    path,  # type: ignore[arg-type]
                 )
                 if os.path.exists(local_path):
                     yield local_path
                     return
 
             local_path = os.path.join(
-                self.local_media_directory, paths[0]  # type: ignore[arg-type]
+                self.local_media_directory,
+                paths[0],  # type: ignore[arg-type]
             )
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
 

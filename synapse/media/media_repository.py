@@ -94,6 +94,18 @@ UPDATE_RECENTLY_ACCESSED_TS = Duration(minutes=1)
 MEDIA_RETENTION_CHECK_PERIOD = Duration(hours=1)
 
 
+def _remove_directory(path: str) -> None:
+    """Remove a directory, tolerating only an absent root directory."""
+
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        # A concurrent cleanup may have removed the root. Do not hide an
+        # ENOENT raised for a path below an otherwise existing root.
+        if os.path.lexists(path):
+            raise
+
+
 class MediaRepository:
     def __init__(self, hs: "HomeServer"):
         self.hs = hs
@@ -1633,7 +1645,7 @@ class MediaRepository:
                 thumbnail_dir = self.filepaths.remote_media_thumbnail_dir(
                     origin, file_id
                 )
-                shutil.rmtree(thumbnail_dir, ignore_errors=True)
+                await self._remove_thumbnail_directory(thumbnail_dir)
 
                 await self.store.delete_remote_media(origin, media_id)
                 deleted += 1
@@ -1715,7 +1727,7 @@ class MediaRepository:
                 thumbnail_dir = self.filepaths.url_cache_thumbnail_directory(media_id)
             else:
                 thumbnail_dir = self.filepaths.local_media_thumbnail_dir(media_id)
-            shutil.rmtree(thumbnail_dir, ignore_errors=True)
+            await self._remove_thumbnail_directory(thumbnail_dir)
 
             await self.store.delete_remote_media(self.server_name, media_id)
 
@@ -1725,3 +1737,8 @@ class MediaRepository:
             removed_media.append(media_id)
 
         return removed_media, len(removed_media)
+
+    async def _remove_thumbnail_directory(self, path: str) -> None:
+        """Remove a thumbnail directory without blocking the reactor."""
+
+        await defer_to_thread(self.hs.get_reactor(), _remove_directory, path)

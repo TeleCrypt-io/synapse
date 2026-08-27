@@ -129,8 +129,7 @@ class DeletionRecordingStorageProvider(StorageProvider):
             os.path.exists(os.path.join(self.local_base_path, path))
         )
         if self.failure is not None and (
-            self.failure_after is None
-            or len(self.delete_paths) >= self.failure_after
+            self.failure_after is None or len(self.delete_paths) >= self.failure_after
         ):
             raise self.failure
 
@@ -260,10 +259,11 @@ class MediaStorageTests(unittest.HomeserverTestCase):
         os.makedirs(staging_tmp_path)
         os.makedirs(staging_media_path)
 
-        with patch(
-            "synapse.media.media_storage.MEDIA_STAGING_ROOT", staging_path
-        ), patch(
-            "synapse.media.media_storage.MEDIA_STAGING_DIRECTORY", staging_tmp_path
+        with (
+            patch("synapse.media.media_storage.MEDIA_STAGING_ROOT", staging_path),
+            patch(
+                "synapse.media.media_storage.MEDIA_STAGING_DIRECTORY", staging_tmp_path
+            ),
         ):
             self.get_success(
                 media_storage.store_file(
@@ -304,13 +304,15 @@ class MediaStorageTests(unittest.HomeserverTestCase):
         staging_tmp_path = os.path.join(staging_path, "tmp")
         os.makedirs(staging_tmp_path)
 
-        with patch(
-            "synapse.media.media_storage.MEDIA_STAGING_ROOT", staging_path
-        ), patch(
-            "synapse.media.media_storage.MEDIA_STAGING_DIRECTORY", staging_tmp_path
-        ), patch(
-            "synapse.media.media_storage.os.remove",
-            side_effect=OSError("test cleanup failure"),
+        with (
+            patch("synapse.media.media_storage.MEDIA_STAGING_ROOT", staging_path),
+            patch(
+                "synapse.media.media_storage.MEDIA_STAGING_DIRECTORY", staging_tmp_path
+            ),
+            patch(
+                "synapse.media.media_storage.os.remove",
+                side_effect=OSError("test cleanup failure"),
+            ),
         ):
             self.get_failure(
                 media_storage.store_file(
@@ -382,7 +384,10 @@ class MediaStorageTests(unittest.HomeserverTestCase):
         ]
         file_infos = [
             FileInfo(None, media_id),
-            *(FileInfo(None, media_id, thumbnail=thumbnail) for thumbnail in thumbnails),
+            *(
+                FileInfo(None, media_id, thumbnail=thumbnail)
+                for thumbnail in thumbnails
+            ),
             FileInfo(remote_server, media_id),
             FileInfo(remote_server, media_id, thumbnail=thumbnails[0]),
         ]
@@ -518,12 +523,9 @@ class MediaStorageTests(unittest.HomeserverTestCase):
             FileInfo(None, "url-cache-media", url_cache=True),
         ]
         paths = [
-            self.media_storage._file_info_to_path(file_info)
-            for file_info in file_infos
+            self.media_storage._file_info_to_path(file_info) for file_info in file_infos
         ]
-        local_paths = [
-            os.path.join(self.primary_base_path, path) for path in paths
-        ]
+        local_paths = [os.path.join(self.primary_base_path, path) for path in paths]
         for local_path in local_paths:
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
             with open(local_path, "wb") as local_file:
@@ -551,6 +553,43 @@ class MediaStorageTests(unittest.HomeserverTestCase):
 
         self.assertEqual(provider.delete_paths, [])
         self.assertTrue(all(not os.path.exists(path) for path in local_paths))
+
+    def test_deletion_supported_requires_an_applicable_backend(self) -> None:
+        no_backend = MediaStorage(self.hs, self.filepaths, [], local_provider=None)
+        self.assertFalse(no_backend.deletion_supported)
+
+        provider = DeletionRecordingStorageProvider(
+            self.primary_base_path, supports_deletion=True
+        )
+        remote_only = MediaStorage(
+            self.hs,
+            self.filepaths,
+            [
+                StorageProviderWrapper(
+                    provider,
+                    store_local=False,
+                    store_remote=True,
+                    store_synchronous=True,
+                )
+            ],
+            local_provider=None,
+        )
+        self.assertFalse(remote_only.deletion_supported)
+
+        local_provider = MediaStorage(
+            self.hs,
+            self.filepaths,
+            [
+                StorageProviderWrapper(
+                    provider,
+                    store_local=True,
+                    store_remote=False,
+                    store_synchronous=True,
+                )
+            ],
+            local_provider=None,
+        )
+        self.assertTrue(local_provider.deletion_supported)
 
     def test_repository_local_deletion_uses_thumbnails_before_metadata(self) -> None:
         media_id = "local-repository-media"
@@ -589,9 +628,7 @@ class MediaStorageTests(unittest.HomeserverTestCase):
                 new=delete_remote_media,
             ),
             patch.object(media_repo.store, "delete_url_cache", new=AsyncMock()),
-            patch.object(
-                media_repo.store, "delete_url_cache_media", new=AsyncMock()
-            ),
+            patch.object(media_repo.store, "delete_url_cache_media", new=AsyncMock()),
         ):
             removal = defer.ensureDeferred(
                 media_repo.delete_local_media_ids([media_id])
@@ -602,6 +639,103 @@ class MediaStorageTests(unittest.HomeserverTestCase):
         self.assertEqual(provider.provider_saw_local, [True, True])
         self.assertFalse(any(os.path.exists(path) for path in local_paths))
         delete_remote_media.assert_awaited_once_with(self.hs.hostname, media_id)
+
+    def test_repository_local_deletion_tolerates_absent_thumbnail_directory(
+        self,
+    ) -> None:
+        media_id = "local-repository-without-thumbnails"
+        path = self.filepaths.local_media_filepath_rel(media_id)
+        local_path = os.path.join(self.primary_base_path, path)
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        with open(local_path, "wb") as local_file:
+            local_file.write(b"local media")
+
+        provider = DeletionRecordingStorageProvider(self.primary_base_path)
+        media_repo = self._media_repository_with_storage(
+            self._media_storage_with_deletion_provider(provider)
+        )
+        delete_remote_media = AsyncMock()
+        with (
+            patch.object(
+                media_repo.store,
+                "get_local_media",
+                new=AsyncMock(return_value=Mock(url_cache=None)),
+            ),
+            patch.object(
+                media_repo.store,
+                "get_local_media_thumbnails",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch.object(
+                media_repo.store,
+                "delete_remote_media",
+                new=delete_remote_media,
+            ),
+            patch.object(media_repo.store, "delete_url_cache", new=AsyncMock()),
+            patch.object(media_repo.store, "delete_url_cache_media", new=AsyncMock()),
+        ):
+            removal = defer.ensureDeferred(
+                media_repo.delete_local_media_ids([media_id])
+            )
+            self.assertEqual(self.get_success(removal), ([media_id], 1))
+
+        self.assertFalse(os.path.exists(local_path))
+        self.assertEqual(provider.delete_paths, [path])
+        delete_remote_media.assert_awaited_once_with(self.hs.hostname, media_id)
+
+    def test_repository_deletion_preserves_metadata_when_thumbnail_directory_fails(
+        self,
+    ) -> None:
+        media_id = "repository-thumbnail-directory-failure"
+        path = self.filepaths.local_media_filepath_rel(media_id)
+        local_path = os.path.join(self.primary_base_path, path)
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        with open(local_path, "wb") as local_file:
+            local_file.write(b"local media")
+
+        provider = DeletionRecordingStorageProvider(self.primary_base_path)
+        media_repo = self._media_repository_with_storage(
+            self._media_storage_with_deletion_provider(provider)
+        )
+        delete_remote_media = AsyncMock()
+        delete_url_cache = AsyncMock()
+        delete_url_cache_media = AsyncMock()
+        with (
+            patch.object(
+                media_repo.store,
+                "get_local_media",
+                new=AsyncMock(return_value=Mock(url_cache=None)),
+            ),
+            patch.object(
+                media_repo.store,
+                "get_local_media_thumbnails",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch.object(
+                media_repo.store,
+                "delete_remote_media",
+                new=delete_remote_media,
+            ),
+            patch.object(media_repo.store, "delete_url_cache", new=delete_url_cache),
+            patch.object(
+                media_repo.store,
+                "delete_url_cache_media",
+                new=delete_url_cache_media,
+            ),
+            patch(
+                "synapse.media.media_repository.shutil.rmtree",
+                side_effect=OSError("thumbnail directory failure"),
+            ),
+        ):
+            removal = defer.ensureDeferred(
+                media_repo.delete_local_media_ids([media_id])
+            )
+            self.get_failure(removal, OSError)
+
+        self.assertFalse(os.path.exists(local_path))
+        delete_remote_media.assert_not_awaited()
+        delete_url_cache.assert_not_awaited()
+        delete_url_cache_media.assert_not_awaited()
 
     def test_repository_remote_deletion_uses_canonical_and_legacy_thumbnails(
         self,
@@ -713,9 +847,7 @@ class MediaStorageTests(unittest.HomeserverTestCase):
             ),
             patch.object(media_repo.store, "delete_remote_media", new=AsyncMock()),
             patch.object(media_repo.store, "delete_url_cache", new=AsyncMock()),
-            patch.object(
-                media_repo.store, "delete_url_cache_media", new=AsyncMock()
-            ),
+            patch.object(media_repo.store, "delete_url_cache_media", new=AsyncMock()),
         ):
             removal = defer.ensureDeferred(
                 media_repo.delete_local_media_ids([media_id])
@@ -834,7 +966,9 @@ class MediaStorageTests(unittest.HomeserverTestCase):
                 new=delete_remote_media,
             ),
         ):
-            removal = defer.ensureDeferred(media_repo.delete_local_media_ids([media_id]))
+            removal = defer.ensureDeferred(
+                media_repo.delete_local_media_ids([media_id])
+            )
             self.get_failure(removal, RuntimeError)
 
         self.assertEqual(provider.delete_paths, paths)

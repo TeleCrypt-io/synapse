@@ -299,19 +299,7 @@ class MediaStorage:
                     return FileResponder(self.hs, open(local_path, "rb"))
             return None
 
-        paths = [self._file_info_to_path(file_info)]
-
-        # fallback for remote thumbnails with no method in the filename
-        if file_info.thumbnail and file_info.server_name:
-            paths.append(
-                self.filepaths.remote_media_thumbnail_rel_legacy(
-                    server_name=file_info.server_name,
-                    file_id=file_info.file_id,
-                    width=file_info.thumbnail.width,
-                    height=file_info.thumbnail.height,
-                    content_type=file_info.thumbnail.type,
-                )
-            )
+        paths = self._file_info_to_paths(file_info)
 
         # Check local provider first, then other storage providers
         if self.local_provider:
@@ -353,71 +341,61 @@ class MediaStorage:
             async with media_storage.ensure_media_is_in_local_cache(file_info) as path:
                 # use path to read the file
         """
-        path = self._file_info_to_path(file_info)
+        paths = self._file_info_to_paths(file_info)
         if self.local_provider:
-            local_path = os.path.join(self.local_media_directory, path)  # type: ignore[arg-type]
-            if os.path.exists(local_path):
-                yield local_path
-                return
-
-            # Fallback for paths without method names
-            # Should be removed in the future
-            if file_info.thumbnail and file_info.server_name:
-                legacy_path = self.filepaths.remote_media_thumbnail_rel_legacy(
-                    server_name=file_info.server_name,
-                    file_id=file_info.file_id,
-                    width=file_info.thumbnail.width,
-                    height=file_info.thumbnail.height,
-                    content_type=file_info.thumbnail.type,
+            for path in paths:
+                local_path = os.path.join(
+                    self.local_media_directory, path  # type: ignore[arg-type]
                 )
-                legacy_local_path = os.path.join(
-                    self.local_media_directory,  # type: ignore[arg-type]
-                    legacy_path,
-                )
-                if os.path.exists(legacy_local_path):
-                    yield legacy_local_path
+                if os.path.exists(local_path):
+                    yield local_path
                     return
 
+            local_path = os.path.join(
+                self.local_media_directory, paths[0]  # type: ignore[arg-type]
+            )
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
             for provider in self.storage_providers:
-                remote_res: Any = await provider.fetch(path, file_info)
-                if remote_res:
-                    with remote_res:
-                        consumer = BackgroundFileConsumer(
-                            open(local_path, "wb"), self.reactor
-                        )
-                        await remote_res.write_to_consumer(consumer)
-                        await consumer.wait()
-                    yield local_path
-                    return
+                for path in paths:
+                    remote_res: Any = await provider.fetch(path, file_info)
+                    if remote_res:
+                        with remote_res:
+                            consumer = BackgroundFileConsumer(
+                                open(local_path, "wb"), self.reactor
+                            )
+                            await remote_res.write_to_consumer(consumer)
+                            await consumer.wait()
+                        yield local_path
+                        return
 
             raise NotFoundError()
         else:
             # No local provider, download to temp file and clean up after use
             for provider in self.storage_providers:
-                res: Any = await provider.fetch(path, file_info)
-                if res:
-                    temp_path = None
-                    try:
-                        with tempfile.NamedTemporaryFile(
-                            delete=False, suffix=os.path.splitext(path)[1]
-                        ) as tmp:
-                            temp_path = tmp.name
-                        with res:
-                            consumer = BackgroundFileConsumer(
-                                open(temp_path, "wb"), self.reactor
-                            )
-                            await res.write_to_consumer(consumer)
-                            await consumer.wait()
-                        yield temp_path
-                    finally:
-                        if temp_path:
-                            try:
-                                os.remove(temp_path)
-                            except Exception:
-                                pass
-                    return
+                for path in paths:
+                    res: Any = await provider.fetch(path, file_info)
+                    if res:
+                        temp_path = None
+                        try:
+                            with tempfile.NamedTemporaryFile(
+                                delete=False, suffix=os.path.splitext(path)[1]
+                            ) as tmp:
+                                temp_path = tmp.name
+                            with res:
+                                consumer = BackgroundFileConsumer(
+                                    open(temp_path, "wb"), self.reactor
+                                )
+                                await res.write_to_consumer(consumer)
+                                await consumer.wait()
+                            yield temp_path
+                        finally:
+                            if temp_path:
+                                try:
+                                    os.remove(temp_path)
+                                except Exception:
+                                    pass
+                        return
 
             raise NotFoundError()
 
@@ -463,15 +441,44 @@ class MediaStorage:
             )
         return self.filepaths.local_media_filepath_rel(file_info.file_id)
 
+    def _file_info_to_paths(self, file_info: FileInfo) -> list[str]:
+        """Return the current path and any paths used by older media layouts."""
+        path = self._file_info_to_path(file_info)
+        paths = [path]
+
+        # Remote thumbnails were previously stored without the thumbnailing
+        # method in their filename. Keep looking up and removing that path so
+        # existing media is handled consistently with newly generated media.
+        if file_info.thumbnail and file_info.server_name:
+            legacy_path = self.filepaths.remote_media_thumbnail_rel_legacy(
+                server_name=file_info.server_name,
+                file_id=file_info.file_id,
+                width=file_info.thumbnail.width,
+                height=file_info.thumbnail.height,
+                content_type=file_info.thumbnail.type,
+            )
+            if legacy_path != path:
+                paths.append(legacy_path)
+
+        return paths
+
     async def remove_file(self, file_info: FileInfo) -> None:
         """Removes the file described by file_info from the configured storage providers.
 
         Args:
             file_info: Metadata about the media file
         """
-        path = self._file_info_to_path(file_info)
-        for provider in filter(None, [self.local_provider, *self.storage_providers]):
-            await provider.delete(path, file_info)
+        paths = self._file_info_to_paths(file_info)
+
+        # Remove copies from external providers first. If one of them fails,
+        # the local copy remains available for a later retry.
+        for path in paths:
+            for provider in self.storage_providers:
+                await provider.delete(path, file_info)
+
+        if self.local_provider:
+            for path in paths:
+                await self.local_provider.delete(path, file_info)
 
 
 @trace

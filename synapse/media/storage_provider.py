@@ -145,10 +145,23 @@ class StorageProviderWrapper(StorageProvider):
     @trace_with_opname("StorageProviderWrapper.delete")
     async def delete(self, path: str, file_info: FileInfo) -> None:
         # see: fetch
-        if file_info.url_cache or getattr(self.backend, "delete", None) is None:
+        if file_info.url_cache:
             return None
 
-        return await maybe_awaitable(self.backend.delete(path, file_info))
+        if not file_info.server_name and not self.store_local:
+            return None
+
+        if file_info.server_name and not self.store_remote:
+            return None
+
+        # Providers written before the delete API was added may not have a
+        # delete method at all.  Keep those providers usable for reads and
+        # writes without requiring them to implement deletion.
+        delete = getattr(self.backend, "delete", None)
+        if delete is None:
+            return None
+
+        return await maybe_awaitable(delete(path, file_info))
 
 
 class FileStorageProviderBackend(StorageProvider):
@@ -217,8 +230,12 @@ class FileStorageProviderBackend(StorageProvider):
         # Convert to an absolute path.
         fn = os.path.join(self.base_directory, path)
         if os.path.isfile(fn):
-            await defer_to_thread(
-                self.reactor,
-                os.remove,
-                fn,
-            )
+            try:
+                await defer_to_thread(
+                    self.reactor,
+                    os.remove,
+                    fn,
+                )
+            except FileNotFoundError:
+                # The file may have been removed between isfile and remove.
+                pass

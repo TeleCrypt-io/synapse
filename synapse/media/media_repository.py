@@ -1635,11 +1635,15 @@ class MediaRepository:
         """
         removed_media = []
         for media_id in media_ids:
-            file_info = FileInfo(None, media_id)
+            media = await self.store.get_local_media(media_id)
+            url_cache = bool(media and media.url_cache)
+            file_info = FileInfo(None, media_id, url_cache=url_cache)
             thumbnails = await self.store.get_local_media_thumbnails(media_id)
             thumbnails_ok = True
             for thumbnail in thumbnails:
-                file = FileInfo(None, media_id, thumbnail=thumbnail)
+                file = FileInfo(
+                    None, media_id, url_cache=url_cache, thumbnail=thumbnail
+                )
                 try:
                     await self.media_storage.remove_file(file)
                 except OSError as e:
@@ -1649,7 +1653,10 @@ class MediaRepository:
             if not thumbnails_ok:
                 # Don't leave dangling thumbnails
                 continue
-            thumbnail_dir = self.filepaths.local_media_thumbnail_dir(media_id)
+            if url_cache:
+                thumbnail_dir = self.filepaths.url_cache_thumbnail_directory(media_id)
+            else:
+                thumbnail_dir = self.filepaths.local_media_thumbnail_dir(media_id)
             shutil.rmtree(thumbnail_dir, ignore_errors=True)
             logger.info("Deleting media with ID '%s'", media_id)
             try:

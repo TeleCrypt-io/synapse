@@ -23,8 +23,8 @@ import shutil
 import tempfile
 from binascii import unhexlify
 from io import BytesIO
-from typing import Any, BinaryIO, ClassVar, Literal
-from unittest.mock import MagicMock, Mock, patch
+from typing import Any, BinaryIO, ClassVar, Literal, cast
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from urllib import parse
 
 import attr
@@ -45,11 +45,12 @@ from synapse.events import EventBase
 from synapse.http.client import ByteWriteable
 from synapse.http.types import QueryParams
 from synapse.logging.context import make_deferred_yieldable
-from synapse.media._base import FileInfo, ThumbnailInfo
+from synapse.media._base import FileInfo, Responder, ThumbnailInfo
 from synapse.media.filepath import MediaFilePaths
 from synapse.media.media_storage import MediaStorage, ReadableFileWrapper
 from synapse.media.storage_provider import (
     FileStorageProviderBackend,
+    StorageProvider,
     StorageProviderWrapper,
 )
 from synapse.media.thumbnailer import ThumbnailProvider
@@ -68,6 +69,40 @@ from tests.unittest import override_config
 from tests.utils import default_config
 
 
+class _RecordingStorageProvider(StorageProvider):
+    def __init__(self, local_directory: str | None = None) -> None:
+        self.delete_calls: list[str] = []
+        self.local_files_at_delete: list[bool] = []
+        self.local_directory = local_directory
+
+    async def store_file(self, path: str, file_info: FileInfo) -> None:
+        pass
+
+    async def fetch(self, path: str, file_info: FileInfo) -> Responder | None:
+        return None
+
+    async def delete(self, path: str, file_info: FileInfo) -> None:
+        self.delete_calls.append(path)
+        if self.local_directory is not None:
+            self.local_files_at_delete.append(
+                os.path.isfile(os.path.join(self.local_directory, path))
+            )
+
+
+class _LegacyStorageProvider:
+    async def store_file(self, path: str, file_info: FileInfo) -> None:
+        pass
+
+    async def fetch(self, path: str, file_info: FileInfo) -> Responder | None:
+        return None
+
+
+class _FailingStorageProvider(_RecordingStorageProvider):
+    async def delete(self, path: str, file_info: FileInfo) -> None:
+        await super().delete(path, file_info)
+        raise RuntimeError("provider deletion failed")
+
+
 class MediaStorageTests(unittest.HomeserverTestCase):
     needs_threadpool = True
 
@@ -80,7 +115,7 @@ class MediaStorageTests(unittest.HomeserverTestCase):
 
         hs.config.media.media_store_path = self.primary_base_path
 
-        local_provider = FileStorageProviderBackend(hs, self.primary_base_path)
+        self.local_provider = FileStorageProviderBackend(hs, self.primary_base_path)
         storage_providers = [
             StorageProviderWrapper(
                 FileStorageProviderBackend(hs, self.secondary_base_path),
@@ -92,7 +127,7 @@ class MediaStorageTests(unittest.HomeserverTestCase):
 
         self.filepaths = MediaFilePaths(self.primary_base_path)
         self.media_storage = MediaStorage(
-            hs, self.filepaths, storage_providers, local_provider
+            hs, self.filepaths, storage_providers, self.local_provider
         )
 
     def test_ensure_media_is_in_local_cache(self) -> None:
@@ -138,6 +173,254 @@ class MediaStorageTests(unittest.HomeserverTestCase):
         self.wait_on_thread(x)
 
         self.get_success(x)
+
+    def test_ensure_media_is_in_local_cache_uses_legacy_remote_thumbnail(self) -> None:
+        file_info = FileInfo(
+            "remote.example",
+            "remote-thumbnail",
+            thumbnail=ThumbnailInfo(
+                width=64,
+                height=64,
+                method="scale",
+                type="image/jpeg",
+                length=1,
+            ),
+        )
+        assert file_info.server_name is not None
+        assert file_info.thumbnail is not None
+        thumbnail = file_info.thumbnail
+        legacy_path = self.filepaths.remote_media_thumbnail_rel_legacy(
+            server_name=file_info.server_name,
+            file_id=file_info.file_id,
+            width=thumbnail.width,
+            height=thumbnail.height,
+            content_type=thumbnail.type,
+        )
+        secondary_path = os.path.join(self.secondary_base_path, legacy_path)
+        os.makedirs(os.path.dirname(secondary_path), exist_ok=True)
+        with open(secondary_path, "w") as f:
+            f.write("legacy thumbnail")
+
+        canonical_path = self.filepaths.remote_media_thumbnail_rel(
+            server_name=file_info.server_name,
+            file_id=file_info.file_id,
+            width=thumbnail.width,
+            height=thumbnail.height,
+            content_type=thumbnail.type,
+            method=thumbnail.method,
+        )
+
+        async def test_ensure_media() -> None:
+            async with self.media_storage.ensure_media_is_in_local_cache(
+                file_info
+            ) as local_path:
+                self.assertEqual(
+                    local_path, os.path.join(self.primary_base_path, canonical_path)
+                )
+                with open(local_path) as f:
+                    self.assertEqual(f.read(), "legacy thumbnail")
+
+        x = defer.ensureDeferred(test_ensure_media())
+        self.wait_on_thread(x)
+        self.get_success(x)
+
+    def test_remove_file_deletes_current_and_legacy_paths(self) -> None:
+        provider_backend = _RecordingStorageProvider(self.primary_base_path)
+        storage = MediaStorage(
+            self.hs,
+            self.filepaths,
+            [
+                StorageProviderWrapper(
+                    provider_backend,
+                    store_local=True,
+                    store_remote=True,
+                    store_synchronous=True,
+                )
+            ],
+            self.local_provider,
+        )
+        thumbnail = ThumbnailInfo(
+            width=64,
+            height=64,
+            method="scale",
+            type="image/jpeg",
+            length=1,
+        )
+        file_infos = [
+            FileInfo(None, "local-original"),
+            FileInfo(None, "local-thumbnail", thumbnail=thumbnail),
+            FileInfo("remote.example", "remote-original"),
+            FileInfo("remote.example", "remote-thumbnail", thumbnail=thumbnail),
+        ]
+
+        for file_info in file_infos:
+            paths = storage._file_info_to_paths(file_info)
+            for path in paths:
+                local_path = os.path.join(self.primary_base_path, path)
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                with open(local_path, "wb") as f:
+                    f.write(b"media")
+
+            provider_backend.delete_calls = []
+            provider_backend.local_files_at_delete = []
+            self.get_success(storage.remove_file(file_info))
+
+            self.assertEqual(provider_backend.delete_calls, paths)
+            self.assertEqual(
+                provider_backend.local_files_at_delete, [True] * len(paths)
+            )
+            self.assertTrue(
+                all(
+                    not os.path.exists(os.path.join(self.primary_base_path, path))
+                    for path in paths
+                )
+            )
+
+    def test_storage_provider_delete_honours_scope_and_url_cache(self) -> None:
+        local_file = FileInfo(None, "local")
+        remote_file = FileInfo("remote.example", "remote")
+        url_cache_file = FileInfo(None, "url-cache", url_cache=True)
+
+        cases = [
+            (local_file, False, True, False),
+            (local_file, True, False, True),
+            (remote_file, True, False, False),
+            (remote_file, False, True, True),
+            (url_cache_file, True, True, False),
+        ]
+        for file_info, store_local, store_remote, should_delete in cases:
+            backend = _RecordingStorageProvider()
+            wrapper = StorageProviderWrapper(
+                backend,
+                store_local=store_local,
+                store_remote=store_remote,
+                store_synchronous=True,
+            )
+
+            self.get_success(wrapper.delete("media-key", file_info))
+
+            self.assertEqual(
+                backend.delete_calls, ["media-key"] if should_delete else []
+            )
+
+    def test_remove_file_is_idempotent_for_missing_files_and_legacy_providers(
+        self,
+    ) -> None:
+        storage = MediaStorage(
+            self.hs,
+            self.filepaths,
+            [
+                StorageProviderWrapper(
+                    cast(StorageProvider, _LegacyStorageProvider()),
+                    store_local=True,
+                    store_remote=True,
+                    store_synchronous=True,
+                )
+            ],
+            self.local_provider,
+        )
+        file_info = FileInfo(None, "missing")
+
+        self.get_success(storage.remove_file(file_info))
+        self.get_success(storage.remove_file(file_info))
+
+    def test_remove_file_preserves_local_file_when_provider_fails(self) -> None:
+        provider_backend = _FailingStorageProvider(self.primary_base_path)
+        storage = MediaStorage(
+            self.hs,
+            self.filepaths,
+            [
+                StorageProviderWrapper(
+                    provider_backend,
+                    store_local=True,
+                    store_remote=True,
+                    store_synchronous=True,
+                )
+            ],
+            self.local_provider,
+        )
+        file_info = FileInfo(None, "retryable")
+        path = storage._file_info_to_path(file_info)
+        local_path = os.path.join(self.primary_base_path, path)
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        with open(local_path, "wb") as f:
+            f.write(b"media")
+
+        self.get_failure(storage.remove_file(file_info), RuntimeError)
+
+        self.assertEqual(provider_backend.local_files_at_delete, [True])
+        self.assertTrue(os.path.exists(local_path))
+
+    def test_media_deletion_preserves_metadata_when_provider_fails(self) -> None:
+        provider_backend = _FailingStorageProvider(self.primary_base_path)
+        storage = MediaStorage(
+            self.hs,
+            self.filepaths,
+            [
+                StorageProviderWrapper(
+                    provider_backend,
+                    store_local=True,
+                    store_remote=True,
+                    store_synchronous=True,
+                )
+            ],
+            self.local_provider,
+        )
+        media_id = "retryable-metadata"
+        thumbnail = ThumbnailInfo(
+            width=64,
+            height=64,
+            method="scale",
+            type="image/jpeg",
+            length=1,
+        )
+        file_infos = [
+            FileInfo(None, media_id, thumbnail=thumbnail),
+            FileInfo(None, media_id),
+        ]
+        for file_info in file_infos:
+            path = storage._file_info_to_path(file_info)
+            local_path = os.path.join(self.primary_base_path, path)
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            with open(local_path, "wb") as f:
+                f.write(b"media")
+
+        media_repo = self.hs.get_media_repository()
+        old_media_storage = media_repo.media_storage
+        media_repo.media_storage = storage
+        self.addCleanup(setattr, media_repo, "media_storage", old_media_storage)
+
+        delete_remote_media = AsyncMock()
+        with (
+            patch.object(
+                media_repo.store, "get_local_media", new=AsyncMock(return_value=None)
+            ),
+            patch.object(
+                media_repo.store,
+                "get_local_media_thumbnails",
+                new=AsyncMock(return_value=[thumbnail]),
+            ),
+            patch.object(
+                media_repo.store,
+                "delete_remote_media",
+                new=delete_remote_media,
+            ),
+        ):
+            self.get_failure(
+                media_repo.delete_local_media_ids([media_id]), RuntimeError
+            )
+
+        delete_remote_media.assert_not_awaited()
+        self.assertTrue(
+            all(
+                os.path.exists(
+                    os.path.join(
+                        self.primary_base_path, storage._file_info_to_path(info)
+                    )
+                )
+                for info in file_infos
+            )
+        )
 
 
 @attr.s(auto_attribs=True, slots=True, frozen=True)

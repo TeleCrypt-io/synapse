@@ -869,8 +869,8 @@ The following fields are returned in the JSON response body:
 This API deletes the *local* media from the disk of your own server
 that a specific `user_id` has created. This includes any local thumbnails.
 
-This API will not affect media that has been uploaded to external
-media repositories (e.g https://github.com/turt2live/matrix-media-repo/).
+When configured, storage providers are also asked to delete their copies of
+the media. Providers that do not support deletion are unaffected.
 
 By default, the API deletes media ordered by descending creation date and ascending media ID.
 The newest media is deleted first. You can change the order with parameters
@@ -1599,5 +1599,3 @@ The following fields are returned in the JSON response body:
   the corresponding error that caused the redaction to fail
 
 _Added in Synapse 1.116.0._
-
-

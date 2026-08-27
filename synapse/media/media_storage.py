@@ -345,14 +345,16 @@ class MediaStorage:
         if self.local_provider:
             for path in paths:
                 local_path = os.path.join(
-                    self.local_media_directory, path  # type: ignore[arg-type]
+                    self.local_media_directory,
+                    path,  # type: ignore[arg-type]
                 )
                 if os.path.exists(local_path):
                     yield local_path
                     return
 
             local_path = os.path.join(
-                self.local_media_directory, paths[0]  # type: ignore[arg-type]
+                self.local_media_directory,
+                paths[0],  # type: ignore[arg-type]
             )
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
 

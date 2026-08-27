@@ -83,6 +83,12 @@ class StorageProvider(metaclass=abc.ABCMeta):
 
         raise NotImplementedError("storage provider does not support deletion")
 
+    def check_delete(self, file_info: FileInfo) -> None:
+        """Check that this provider can delete the given file."""
+
+        if not self.supports_deletion:
+            raise RuntimeError("storage provider does not support deletion")
+
 
 class StorageProviderWrapper(StorageProvider):
     """Wraps a storage provider and provides various config options
@@ -114,15 +120,22 @@ class StorageProviderWrapper(StorageProvider):
     def supports_deletion(self) -> bool:
         return bool(getattr(self.backend, "supports_deletion", False))
 
-    @trace_with_opname("StorageProviderWrapper.store_file")
-    async def store_file(self, path: str, file_info: FileInfo) -> None:
-        if not file_info.server_name and not self.store_local:
-            return None
-
-        if file_info.server_name and not self.store_remote:
-            return None
+    def handles_file(self, file_info: FileInfo) -> bool:
+        """Whether this provider is configured to store the given file."""
 
         if file_info.url_cache:
+            return False
+        if file_info.server_name:
+            return self.store_remote
+        return self.store_local
+
+    def check_delete(self, file_info: FileInfo) -> None:
+        if self.handles_file(file_info):
+            super().check_delete(file_info)
+
+    @trace_with_opname("StorageProviderWrapper.store_file")
+    async def store_file(self, path: str, file_info: FileInfo) -> None:
+        if not self.handles_file(file_info):
             # The URL preview cache is short lived and not worth offloading or
             # backing up.
             return None
@@ -161,6 +174,11 @@ class StorageProviderWrapper(StorageProvider):
 
     @trace_with_opname("StorageProviderWrapper.delete")
     async def delete(self, path: str, file_info: FileInfo) -> None:
+        if not self.handles_file(file_info):
+            return
+
+        self.check_delete(file_info)
+
         delete = getattr(self.backend, "delete", None)
         if delete is None:
             raise NotImplementedError("storage provider does not support deletion")
@@ -221,10 +239,11 @@ class FileStorageProviderBackend(StorageProvider):
 
         return None
 
+    @trace_with_opname("FileStorageProviderBackend.delete")
     async def delete(self, path: str, file_info: FileInfo) -> None:
         backup_fname = os.path.join(self.base_directory, path)
         try:
-            os.remove(backup_fname)
+            await defer_to_thread(self.reactor, os.remove, backup_fname)
         except OSError as e:
             if e.errno != errno.ENOENT:
                 raise

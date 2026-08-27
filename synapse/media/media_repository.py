@@ -19,7 +19,6 @@
 # [This file includes modifications made by New Vector Limited]
 #
 #
-import errno
 import logging
 import os
 import shutil
@@ -1620,18 +1619,16 @@ class MediaRepository:
 
             logger.info("Deleting: %r", key)
 
-            # TODO: Should we delete from the backup store
-
             async with self.remote_media_linearizer.queue(key):
-                full_path = self.filepaths.remote_media_filepath(origin, file_id)
-                try:
-                    os.remove(full_path)
-                except OSError as e:
-                    logger.warning("Failed to remove file: %r", full_path)
-                    if e.errno == errno.ENOENT:
-                        pass
-                    else:
-                        continue
+                thumbnails = await self.store.get_remote_media_thumbnails(
+                    origin, media_id
+                )
+                file_infos = [
+                    FileInfo(origin, file_id, thumbnail=thumbnail)
+                    for thumbnail in thumbnails
+                ]
+                file_infos.append(FileInfo(origin, file_id))
+                await self.media_storage.delete_files(file_infos)
 
                 thumbnail_dir = self.filepaths.remote_media_thumbnail_dir(
                     origin, file_id
@@ -1704,17 +1701,20 @@ class MediaRepository:
         removed_media = []
         for media_id in media_ids:
             logger.info("Deleting media with ID '%s'", media_id)
-            full_path = self.filepaths.local_media_filepath(media_id)
-            try:
-                os.remove(full_path)
-            except OSError as e:
-                logger.warning("Failed to remove file: %r: %s", full_path, e)
-                if e.errno == errno.ENOENT:
-                    pass
-                else:
-                    continue
+            media = await self.store.get_local_media(media_id)
+            url_cache = bool(media and media.url_cache)
+            thumbnails = await self.store.get_local_media_thumbnails(media_id)
+            file_infos = [
+                FileInfo(None, media_id, url_cache=url_cache, thumbnail=thumbnail)
+                for thumbnail in thumbnails
+            ]
+            file_infos.append(FileInfo(None, media_id, url_cache=url_cache))
+            await self.media_storage.delete_files(file_infos)
 
-            thumbnail_dir = self.filepaths.local_media_thumbnail_dir(media_id)
+            if url_cache:
+                thumbnail_dir = self.filepaths.url_cache_thumbnail_directory(media_id)
+            else:
+                thumbnail_dir = self.filepaths.local_media_thumbnail_dir(media_id)
             shutil.rmtree(thumbnail_dir, ignore_errors=True)
 
             await self.store.delete_remote_media(self.server_name, media_id)

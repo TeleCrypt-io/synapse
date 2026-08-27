@@ -287,8 +287,9 @@ Response:
 This API deletes the *local* media from the disk of your own server.
 This includes any local thumbnails and copies of media downloaded from
 remote homeservers.
-This API will not affect media that has been uploaded to external
-media repositories (e.g https://github.com/turt2live/matrix-media-repo/).
+Configured media storage providers are asked to delete their copies as well.
+If an affected provider does not support deletion or fails, the request fails
+and the media metadata is retained for a later retry.
 See also [Purge Remote Media API](#purge-remote-media-api).
 
 ## Delete a specific local media

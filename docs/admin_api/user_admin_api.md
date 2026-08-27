@@ -870,8 +870,9 @@ The following fields are returned in the JSON response body:
 This API deletes the *local* media from the disk of your own server
 that a specific `user_id` has created. This includes any local thumbnails.
 
-This API will not affect media that has been uploaded to external
-media repositories (e.g https://github.com/turt2live/matrix-media-repo/).
+Configured media storage providers are asked to delete their copies as well.
+If an affected provider does not support deletion or fails, the request fails
+and the media metadata is retained for a later retry.
 
 By default, the API deletes media ordered by descending creation date and ascending media ID.
 The newest media is deleted first. You can change the order with parameters

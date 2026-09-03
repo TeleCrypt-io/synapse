@@ -21,7 +21,6 @@
 #
 #
 
-import logging
 import re
 from typing import TYPE_CHECKING
 
@@ -29,12 +28,11 @@ from synapse.http.server import HttpServer
 from synapse.http.servlet import RestServlet
 from synapse.http.site import SynapseRequest
 from synapse.logging.context import PreserveLoggingContext
+from synapse.rest.admin.experimental_features import ExperimentalFeature
 from synapse.types import JsonDict
 
 if TYPE_CHECKING:
     from synapse.server import HomeServer
-
-logger = logging.getLogger(__name__)
 
 
 class VersionsRestServlet(RestServlet):
@@ -43,7 +41,6 @@ class VersionsRestServlet(RestServlet):
 
     def __init__(self, hs: "HomeServer"):
         super().__init__()
-        self.config = hs.config
         self.auth = hs.get_auth()
         self.store = hs.get_datastores().main
         self.rust_handlers = hs.get_rust_handlers()
@@ -80,13 +77,28 @@ class VersionsRestServlet(RestServlet):
         request.setHeader(b"Vary", b"Authorization")
 
         # The request context is authoritative for work done while serving this request.
-        # Re-activate it before entering Rust so its Python database bridge can attribute
-        # work to this request even if authentication yielded through another context.
+        # Re-activate it before entering the stores so database work is attributed to
+        # this request even if authentication yielded through another context.
         assert request.logcontext is not None
         with PreserveLoggingContext(request.logcontext):
             versions_response_body = await self.rust_handlers.versions.get_versions(
-                user_id
+                # Resolve per-user flags through Synapse's existing authoritative store
+                # rather than entering the Rust database bridge.
+                None
             )
+
+            if user_id is not None:
+                unstable_features = versions_response_body["unstable_features"]
+                unstable_features["org.matrix.msc3881"] = (
+                    await self.store.is_feature_enabled(
+                        user_id, ExperimentalFeature.MSC3881
+                    )
+                )
+                unstable_features["org.matrix.simplified_msc3575"] = (
+                    await self.store.is_feature_enabled(
+                        user_id, ExperimentalFeature.MSC3575
+                    )
+                )
 
         return (
             200,

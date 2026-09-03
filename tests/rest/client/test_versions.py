@@ -72,25 +72,27 @@ class VersionsTestCase(unittest.HomeserverTestCase):
         self.admin_user = self.register_user("admin", "pass", admin=True)
         self.admin_user_tok = self.login("admin", "pass")
 
-    def test_unauthenticated(self) -> None:
-        channel = self.make_request(
-            "GET",
-            "/_matrix/client/versions",
-        )
-        self.assertEqual(channel.code, 200, channel.result)
-        self._sanity_check_versions_response(channel.json_body)
+    @unittest.override_config(
+        {
+            "experimental_features": {
+                "msc3881_enabled": False,
+                "msc3575_enabled": False,
+            }
+        }
+    )
+    def test_anonymous_global_flags_false(self) -> None:
+        self._assert_feature_flags(self._request_versions(), False)
 
-    def test_authenticated(self) -> None:
-        user1_id = self.register_user("user1", "pass")
-        user1_tok = self.login(user1_id, "pass")
-
-        channel = self.make_request(
-            "GET",
-            "/_matrix/client/versions",
-            access_token=user1_tok,
-        )
-        self.assertEqual(channel.code, 200, channel.result)
-        self._sanity_check_versions_response(channel.json_body)
+    @unittest.override_config(
+        {
+            "experimental_features": {
+                "msc3881_enabled": True,
+                "msc3575_enabled": True,
+            }
+        }
+    )
+    def test_anonymous_global_flags_true(self) -> None:
+        self._assert_feature_flags(self._request_versions(), True)
 
     @unittest.override_config(
         {
@@ -100,15 +102,14 @@ class VersionsTestCase(unittest.HomeserverTestCase):
             }
         }
     )
-    def test_rust_database_usage_is_attributed_to_calling_context(self) -> None:
-        """The authenticated HTTP path keeps the request context for Rust DB calls."""
+    def test_per_user_feature_lookup_uses_request_context(self) -> None:
+        """Per-user flag lookups use the request context and Python store."""
         db_pool = self.hs.get_datastores().main.db_pool
-        seen_contexts: list[object] = []
+        seen_interactions: list[tuple[str, object]] = []
         original_run_interaction = db_pool.runInteraction
 
         async def run_interaction(desc: str, *args: Any, **kwargs: Any) -> Any:
-            if desc == "is_feature_enabled_for_user":
-                seen_contexts.append(current_context())
+            seen_interactions.append((desc, current_context()))
             return await original_run_interaction(desc, *args, **kwargs)
 
         with patch.object(db_pool, "runInteraction", new=run_interaction):
@@ -120,63 +121,60 @@ class VersionsTestCase(unittest.HomeserverTestCase):
 
         self.assertEqual(channel.code, 200, channel.result)
         self._sanity_check_versions_response(channel.json_body)
-        self.assertEqual(len(seen_contexts), 2)
+        self._assert_feature_flags(channel.json_body, False)
+        self.assertEqual(
+            [desc for desc, _ in seen_interactions],
+            ["get_feature_enabled", "get_feature_enabled"],
+        )
         self.assertTrue(
-            all(context is channel.request.logcontext for context in seen_contexts)
+            all(
+                context is channel.request.logcontext
+                for _, context in seen_interactions
+            )
         )
 
-    def test_authenticated_with_per_user_feature(self) -> None:
+    @unittest.override_config(
+        {
+            "experimental_features": {
+                "msc3881_enabled": False,
+                "msc3575_enabled": False,
+            }
+        }
+    )
+    def test_authenticated_with_per_user_features(self) -> None:
         user1_id = self.register_user("user1", "pass")
         user1_tok = self.login(user1_id, "pass")
-        user2_id = self.register_user("user2", "pass")
-        user2_tok = self.login(user2_id, "pass")
 
-        # Sanity check that the experimental feature should not be enabled yet
-        channel = self.make_request(
-            "GET",
-            "/_matrix/client/versions",
-            access_token=user1_tok,
-        )
-        self.assertEqual(channel.code, 200, channel.result)
-        self._sanity_check_versions_response(channel.json_body)
-        self.assertEqual(
-            channel.json_body["unstable_features"]["org.matrix.msc3881"],
-            False,
-            channel.json_body,
-        )
+        self._assert_feature_flags(self._request_versions(user1_tok), False)
 
-        # Enable the feature for this specific user
         self._enable_experimental_feature_for_user(
-            target_user_id=user1_id, features={"msc3881": True}
+            target_user_id=user1_id,
+            features={"msc3881": True, "msc3575": True},
         )
+        self._assert_feature_flags(self._request_versions(user1_tok), True)
 
-        # The experimental feature should be enabled for this user
-        channel = self.make_request(
-            "GET",
-            "/_matrix/client/versions",
-            access_token=user1_tok,
+        self._enable_experimental_feature_for_user(
+            target_user_id=user1_id,
+            features={"msc3881": False, "msc3575": False},
         )
-        self.assertEqual(channel.code, 200, channel.result)
-        self._sanity_check_versions_response(channel.json_body)
-        self.assertEqual(
-            channel.json_body["unstable_features"]["org.matrix.msc3881"],
-            True,
-            channel.json_body,
-        )
+        self._assert_feature_flags(self._request_versions(user1_tok), False)
 
-        # But not for other users
-        channel = self.make_request(
-            "GET",
-            "/_matrix/client/versions",
-            access_token=user2_tok,
+    @unittest.override_config(
+        {
+            "experimental_features": {
+                "msc3881_enabled": True,
+                "msc3575_enabled": True,
+            }
+        }
+    )
+    def test_global_flags_override_per_user_false(self) -> None:
+        user_id = self.register_user("user1", "pass")
+        user_tok = self.login(user_id, "pass")
+        self._enable_experimental_feature_for_user(
+            target_user_id=user_id,
+            features={"msc3881": False, "msc3575": False},
         )
-        self.assertEqual(channel.code, 200, channel.result)
-        self._sanity_check_versions_response(channel.json_body)
-        self.assertEqual(
-            channel.json_body["unstable_features"]["org.matrix.msc3881"],
-            False,
-            channel.json_body,
-        )
+        self._assert_feature_flags(self._request_versions(user_tok), True)
 
     def test_msc4446_false_by_default(self) -> None:
         channel = self.make_request("GET", "/_matrix/client/versions")
@@ -203,6 +201,22 @@ class VersionsTestCase(unittest.HomeserverTestCase):
             dict,
             f"Expected `unstable_features` to be a dict mapping feature name to a bool but saw {versions_response}",
         )
+
+    def _request_versions(self, access_token: str | None = None) -> JsonDict:
+        channel = self.make_request(
+            "GET", "/_matrix/client/versions", access_token=access_token
+        )
+        self.assertEqual(channel.code, 200, channel.result)
+        self._sanity_check_versions_response(channel.json_body)
+        return channel.json_body
+
+    def _assert_feature_flags(self, response: JsonDict, expected: bool) -> None:
+        unstable_features = response["unstable_features"]
+        self.assertEqual(unstable_features["org.matrix.msc3881"], expected, response)
+        self.assertEqual(
+            unstable_features["org.matrix.simplified_msc3575"], expected, response
+        )
+        self.assertNotIn("org.matrix.msc3575", unstable_features)
 
     def _enable_experimental_feature_for_user(
         self, *, target_user_id: str, features: dict[str, bool]

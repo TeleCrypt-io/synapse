@@ -11,10 +11,12 @@
 # <https://www.gnu.org/licenses/agpl-3.0.html>.
 
 import logging
+from typing import Any
+from unittest.mock import patch
 
 from twisted.internet.testing import MemoryReactor
 
-from synapse.logging.context import LoggingContext
+from synapse.logging.context import current_context
 from synapse.rest import admin
 from synapse.rest.client import login, versions
 from synapse.server import HomeServer
@@ -99,19 +101,29 @@ class VersionsTestCase(unittest.HomeserverTestCase):
         }
     )
     def test_rust_database_usage_is_attributed_to_calling_context(self) -> None:
-        """Database work started by the Rust handler keeps the caller's context."""
-        context = LoggingContext(name="test_rust_versions", server_name=self.hs.hostname)
+        """The authenticated HTTP path keeps the request context for Rust DB calls."""
+        db_pool = self.hs.get_datastores().main.db_pool
+        seen_contexts: list[object] = []
+        original_run_interaction = db_pool.runInteraction
 
-        with context:
-            response = self.get_success(
-                self.hs.get_rust_handlers().versions.get_versions(self.admin_user)
+        async def run_interaction(desc: str, *args: Any, **kwargs: Any) -> Any:
+            if desc == "is_feature_enabled_for_user":
+                seen_contexts.append(current_context())
+            return await original_run_interaction(desc, *args, **kwargs)
+
+        with patch.object(db_pool, "runInteraction", new=run_interaction):
+            channel = self.make_request(
+                "GET",
+                "/_matrix/client/versions",
+                access_token=self.admin_user_tok,
             )
 
-        self._sanity_check_versions_response(response)
-        # With both per-user feature flags disabled, the handler performs one
-        # transaction for each feature lookup. If runInteraction starts in the
-        # sentinel context, these transactions are not charged to `context`.
-        self.assertEqual(context.get_resource_usage().db_txn_count, 2)
+        self.assertEqual(channel.code, 200, channel.result)
+        self._sanity_check_versions_response(channel.json_body)
+        self.assertEqual(len(seen_contexts), 2)
+        self.assertTrue(
+            all(context is channel.request.logcontext for context in seen_contexts)
+        )
 
     def test_authenticated_with_per_user_feature(self) -> None:
         user1_id = self.register_user("user1", "pass")

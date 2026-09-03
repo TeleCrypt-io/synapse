@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 from synapse.http.server import HttpServer
 from synapse.http.servlet import RestServlet
 from synapse.http.site import SynapseRequest
+from synapse.logging.context import PreserveLoggingContext
 from synapse.types import JsonDict
 
 if TYPE_CHECKING:
@@ -78,7 +79,14 @@ class VersionsRestServlet(RestServlet):
         # authenticated responses are not served from cache.
         request.setHeader(b"Vary", b"Authorization")
 
-        versions_response_body = await self.rust_handlers.versions.get_versions(user_id)
+        # The request context is authoritative for work done while serving this request.
+        # Re-activate it before entering Rust so its Python database bridge can attribute
+        # work to this request even if authentication yielded through another context.
+        assert request.logcontext is not None
+        with PreserveLoggingContext(request.logcontext):
+            versions_response_body = await self.rust_handlers.versions.get_versions(
+                user_id
+            )
 
         return (
             200,

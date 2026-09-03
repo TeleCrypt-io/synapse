@@ -14,6 +14,7 @@ import logging
 
 from twisted.internet.testing import MemoryReactor
 
+from synapse.logging.context import LoggingContext
 from synapse.rest import admin
 from synapse.rest.client import login, versions
 from synapse.server import HomeServer
@@ -88,6 +89,29 @@ class VersionsTestCase(unittest.HomeserverTestCase):
         )
         self.assertEqual(channel.code, 200, channel.result)
         self._sanity_check_versions_response(channel.json_body)
+
+    @unittest.override_config(
+        {
+            "experimental_features": {
+                "msc3575_enabled": False,
+                "msc3881_enabled": False,
+            }
+        }
+    )
+    def test_rust_database_usage_is_attributed_to_calling_context(self) -> None:
+        """Database work started by the Rust handler keeps the caller's context."""
+        context = LoggingContext(name="test_rust_versions", server_name=self.hs.hostname)
+
+        with context:
+            response = self.get_success(
+                self.hs.get_rust_handlers().versions.get_versions(self.admin_user)
+            )
+
+        self._sanity_check_versions_response(response)
+        # With both per-user feature flags disabled, the handler performs one
+        # transaction for each feature lookup. If runInteraction starts in the
+        # sentinel context, these transactions are not charged to `context`.
+        self.assertEqual(context.get_resource_usage().db_txn_count, 2)
 
     def test_authenticated_with_per_user_feature(self) -> None:
         user1_id = self.register_user("user1", "pass")

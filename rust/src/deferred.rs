@@ -68,10 +68,35 @@ fn logging_context_module(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
         .bind(py))
 }
 
+/// Set the Synapse logcontext active on the current (reactor) thread, returning
+/// the context that was previously active so it can be restored afterwards.
+fn set_current_logging_context<'py>(
+    py: Python<'py>,
+    context: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    logging_context_module(py)?.call_method1(intern!(py, "set_current_context"), (context,))
+}
+
+tokio::task_local! {
+    /// The Synapse `LoggingContext` that was active on the reactor thread when
+    /// the Rust future was created (see [`create_deferred`]).
+    ///
+    /// Synapse attributes per-request CPU/DB usage via a thread-local
+    /// `LoggingContext`, but our work runs on a Tokio worker thread that is
+    /// detached from it. We stash the originating context here so that whenever
+    /// we hop back onto the reactor thread to drive Python work (see
+    /// [`run_python_awaitable`]) we can re-activate it; otherwise that work runs in
+    /// the sentinel context and its resource usage (e.g. database time) is lost
+    /// instead of being charged to the request.
+    static LOGGING_CONTEXT: Py<PyAny>;
+}
+
 /// Creates a twisted deferred from the given future, spawning the task on the
 /// tokio runtime.
 ///
-/// Does not handle deferred cancellation or contextvars.
+/// Captures the Synapse logcontext active on the reactor thread so work driven by
+/// the future is attributed to the originating request. Does not handle deferred
+/// cancellation or contextvars.
 pub fn create_deferred<'py, F, O>(
     py: Python<'py>,
     reactor: &Bound<'py, PyAny>,
@@ -85,9 +110,15 @@ where
     let deferred_callback = deferred.getattr("callback")?.unbind();
     let deferred_errback = deferred.getattr("errback")?.unbind();
 
+    // Capture the logcontext while we're still on the reactor thread, so the
+    // spawned task can re-apply it when it hops back to drive Python work.
+    let logging_context = logging_context_module(py)?
+        .call_method0(intern!(py, "current_context"))?
+        .unbind();
+
     let rt = runtime(reactor)?;
     let handle = rt.handle()?;
-    let task = handle.spawn(fut);
+    let task = handle.spawn(LOGGING_CONTEXT.scope(logging_context, fut));
 
     // Unbind the reactor so that we can pass it to the task
     let reactor = reactor.clone().unbind();
@@ -136,6 +167,9 @@ where
 /// Despite returning a future, the awaitable is kicked off in the background running in
 /// the Twisted reactor and runs to completion regardless of whether the returned Rust
 /// future is ever polled; awaiting it only observes the result.
+///
+/// The awaitable is started in the logcontext associated with the current Rust task,
+/// so database usage and logging remain correlated with the originating request.
 pub(crate) async fn run_python_awaitable<F>(
     reactor: Py<PyAny>,
     make_awaitable: F,
@@ -147,6 +181,18 @@ where
     let (tx, rx) = oneshot::channel::<PyResult<Py<PyAny>>>();
     // Shared between the success and error callbacks (only one ever fires).
     let sender = Arc::new(Mutex::new(Some(tx)));
+
+    // The logcontext that is active for this async Rust task. This function is
+    // only valid for futures spawned by `create_deferred`, which establishes the
+    // task-local context. Fail before scheduling any Python work if that invariant
+    // is violated.
+    let rust_task_logging_context = LOGGING_CONTEXT
+        .try_with(|ctx| Python::attach(|py| ctx.clone_ref(py)))
+        .map_err(|_| {
+            PyRuntimeError::new_err(
+                "run_python_awaitable called outside a create_deferred Rust task",
+            )
+        })?;
 
     Python::attach(|py| -> PyResult<()> {
         // Create some deferred success/error callback functions that we will use to get
@@ -193,9 +239,8 @@ where
         )?
         .unbind();
 
-        // Wrap `make_awaitable` as a Python callable so we can hand it to
-        // `run_in_background`, which calls it (in the active logcontext) to produce
-        // the awaitable it then drives.
+        // Wrap `make_awaitable` as a Python callable so `run_in_background`
+        // invokes it in the active logcontext and drives the resulting awaitable.
         let awaitable_factory = PyCFunction::new_closure(
             py,
             None,
@@ -216,15 +261,19 @@ where
             move |args, _kwargs| -> PyResult<Py<PyAny>> {
                 let py = args.py();
 
-                // We fire-and-forget using `run_in_background`. Re-using
-                // `run_in_background` also makes sure the awaitable gets run with the
-                // current logcontext while following the logcontext rules.
-                //
-                // FIXME: Currently runs in the sentinel logcontext because we don't manage it here
+                // Activate the context captured when the Rust task was created while
+                // the awaitable is kicked off. `run_in_background` then preserves the
+                // context for the awaitable and resets the reactor to its prior context.
+                let previous_context =
+                    set_current_logging_context(py, rust_task_logging_context.bind(py))?;
+
                 let deferred = logging_context_module(py)?.call_method1(
                     intern!(py, "run_in_background"),
                     (awaitable_factory.bind(py),),
                 );
+
+                // Restore the reactor's context even if starting the awaitable failed.
+                set_current_logging_context(py, &previous_context)?;
 
                 let deferred = deferred?;
                 deferred.call_method1(

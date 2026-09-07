@@ -281,23 +281,27 @@ class MediaStorage:
 
         path = self._file_info_to_path(file_info)
         is_temp_file = False
+        media_filepath: str | None = None
 
-        if self.local_provider:
-            media_filepath = os.path.join(self.local_media_directory, path)  # type: ignore[arg-type]
-            os.makedirs(os.path.dirname(media_filepath), exist_ok=True)
-
-            with start_active_span("writing to main media repo"):
-                with open(media_filepath, "wb") as f:
-                    yield f, media_filepath
-        else:
-            # No local provider, write to temp file
-            is_temp_file = True
-            with self._make_media_temp_file() as f:
-                media_filepath = f.name
-                yield cast(BinaryIO, f), media_filepath
-
-        # Spam check and store to other providers (runs for both local and temp file cases)
         try:
+            if self.local_provider:
+                media_filepath = os.path.join(
+                    self.local_media_directory, path  # type: ignore[arg-type]
+                )
+                os.makedirs(os.path.dirname(media_filepath), exist_ok=True)
+
+                with start_active_span("writing to main media repo"):
+                    with open(media_filepath, "wb") as f:
+                        yield f, media_filepath
+            else:
+                # No local provider, write to temp file
+                is_temp_file = True
+                with self._make_media_temp_file() as f:
+                    media_filepath = f.name
+                    yield cast(BinaryIO, f), media_filepath
+
+            assert media_filepath is not None
+            # Spam check and store to other providers (runs for both local and temp file cases)
             with start_active_span("spam checking and writing to storage providers"):
                 spam_check = (
                     await self._spam_checker_module_callbacks.check_media_file_for_spam(
@@ -325,20 +329,21 @@ class MediaStorage:
                 if is_temp_file:
                     self._remove_media_temp_file(media_filepath)
 
-        except Exception as e:
-            try:
-                if is_temp_file:
-                    self._remove_media_temp_file(media_filepath)
-                else:
-                    os.remove(media_filepath)
-            except Exception:
-                # Preserve the original storage failure. There is no metadata
-                # success on this path, but leave an explicit operational signal
-                # if the best-effort failure cleanup also cannot remove the file.
-                logger.exception(
-                    "Failed to clean up media file after storage failure: %s",
-                    media_filepath,
-                )
+        except BaseException as e:
+            if media_filepath is not None:
+                try:
+                    if is_temp_file:
+                        self._remove_media_temp_file(media_filepath)
+                    else:
+                        os.remove(media_filepath)
+                except Exception:
+                    # Preserve the original storage failure. There is no metadata
+                    # success on this path, but leave an explicit operational signal
+                    # if the best-effort failure cleanup also cannot remove the file.
+                    logger.exception(
+                        "Failed to clean up media file after storage failure: %s",
+                        media_filepath,
+                    )
 
             raise e from None
 

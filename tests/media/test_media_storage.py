@@ -284,6 +284,46 @@ class MediaStorageTests(unittest.HomeserverTestCase):
         )
         self.assertFalse(os.path.exists(recording_provider.upload_path))
 
+    @parameterized.expand(
+        [
+            ("write_failure", OSError("write failed"), OSError),
+            ("cancellation", defer.CancelledError(), defer.CancelledError),
+        ]
+    )
+    def test_temporary_upload_cleans_up_when_write_does_not_complete(
+        self, _name: str, failure: Exception, expected_failure: type[Exception]
+    ) -> None:
+        media_storage = MediaStorage(
+            self.hs,
+            MediaFilePaths(self.test_dir),
+            [],
+            local_provider=None,
+        )
+
+        staging_path = os.path.join(self.test_dir, "staging")
+        staging_tmp_path = os.path.join(staging_path, "tmp")
+        os.makedirs(staging_tmp_path)
+
+        with (
+            patch("synapse.media.media_storage.MEDIA_STAGING_ROOT", staging_path),
+            patch(
+                "synapse.media.media_storage.MEDIA_STAGING_DIRECTORY", staging_tmp_path
+            ),
+            patch.object(
+                media_storage,
+                "write_to_file",
+                new=AsyncMock(side_effect=failure),
+            ),
+        ):
+            self.get_failure(
+                media_storage.store_file(
+                    BytesIO(b"temporary source"), FileInfo(None, "media")
+                ),
+                expected_failure,
+            )
+
+        self.assertEqual(os.listdir(staging_tmp_path), [])
+
     def test_temporary_upload_fails_if_cleanup_leaves_residue(self) -> None:
         recording_provider = RecordingStorageProvider()
         media_storage = MediaStorage(

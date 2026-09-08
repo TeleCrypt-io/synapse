@@ -77,7 +77,7 @@ ENV CARGO_HOME=/cargo
 ENV PATH=/cargo/bin:/rust/bin:$PATH
 RUN mkdir /rust /cargo
 
-RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain stable --profile minimal
+RUN curl -Sf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain stable --profile minimal
 
 # arm64 builds consume a lot of memory if `CARGO_NET_GIT_FETCH_WITH_CLI` is not
 # set to true, so we expose it as a build-arg.
@@ -133,7 +133,7 @@ RUN dpkg --add-architecture amd64
 RUN \
   --mount=type=cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,target=/var/lib/apt,sharing=locked \
-  apt-get update -qq && \
+  apt-get update && \
   apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts --no-breaks --no-replaces --no-enhances --no-pre-depends \
       curl \
       gosu \

@@ -15,7 +15,6 @@
 use std::collections::HashMap;
 
 use anyhow::Context;
-use http_body_util::BodyExt;
 use pyo3::prelude::*;
 use reqwest::RequestBuilder;
 
@@ -77,16 +76,14 @@ impl HttpClient {
         &self,
         py: Python<'a>,
         url: String,
-        response_limit: usize,
     ) -> PyResult<Bound<'a, PyAny>> {
-        self.send_request(py, self.client.get(url), response_limit)
+        self.send_request(py, self.client.get(url))
     }
 
     pub fn post<'a>(
         &self,
         py: Python<'a>,
         url: String,
-        response_limit: usize,
         headers: HashMap<String, String>,
         request_body: String,
     ) -> PyResult<Bound<'a, PyAny>> {
@@ -96,7 +93,7 @@ impl HttpClient {
         }
         builder = builder.body(request_body);
 
-        self.send_request(py, builder, response_limit)
+        self.send_request(py, builder)
     }
 }
 
@@ -105,29 +102,13 @@ impl HttpClient {
         &self,
         py: Python<'a>,
         builder: RequestBuilder,
-        response_limit: usize,
     ) -> PyResult<Bound<'a, PyAny>> {
         create_deferred(py, self.reactor.bind(py), async move {
             let response = builder.send().await.context("sending request")?;
 
             let status = response.status();
 
-            // A light-weight way to read the response up until the `response_limit`. We
-            // want to avoid allocating a giant response object on the server above our
-            // expected `response_limit` to avoid out-of-memory DOS problems.
-            let body = reqwest::Body::from(response);
-            let limited_body = http_body_util::Limited::new(body, response_limit);
-            let collected = limited_body
-                .collect()
-                .await
-                .map_err(anyhow::Error::from_boxed)
-                .with_context(|| {
-                    format!(
-                        "Response body exceeded response limit ({} bytes)",
-                        response_limit
-                    )
-                })?;
-            let bytes: bytes::Bytes = collected.to_bytes();
+            let bytes = response.bytes().await.context("reading response body")?;
 
             if !status.is_success() {
                 return Err(HttpResponseException::new(status, bytes));

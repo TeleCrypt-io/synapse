@@ -24,7 +24,6 @@ import sys
 import traceback
 from collections import deque
 from ipaddress import IPv4Address, IPv6Address, ip_address
-from math import floor
 from typing import Callable, Optional
 
 import attr
@@ -45,9 +44,6 @@ from twisted.internet.interfaces import (
 from twisted.internet.protocol import Factory, Protocol
 from twisted.internet.tcp import Connection
 from twisted.python.failure import Failure
-
-logger = logging.getLogger(__name__)
-
 
 @attr.s(slots=True, auto_attribs=True)
 @implementer(IPushProducer)
@@ -82,6 +78,7 @@ class LogProducer:
 
         # Loop until paused.
         while self._paused is False and (self._buffer and self.transport.connected):
+            record: logging.LogRecord | None = None
             try:
                 # Request the next record and format it.
                 record = self._buffer.popleft()
@@ -91,6 +88,10 @@ class LogProducer:
                 self.transport.write(msg.encode("utf8"))
                 self.transport.write(b"\n")
             except Exception:
+                # Keep a record if the transport rejects it. The handler's
+                # buffer is the source of truth for the next connection.
+                if record is not None:
+                    self._buffer.appendleft(record)
                 # Something has gone wrong writing to the transport -- log it
                 # and break out of the while.
                 traceback.print_exc(file=sys.__stderr__)
@@ -104,21 +105,18 @@ class RemoteHandler(logging.Handler):
     Args:
         host: The host of the logging target.
         port: The logging target's port.
-        maximum_buffer: The maximum buffer size.
     """
 
     def __init__(
         self,
         host: str,
         port: int,
-        maximum_buffer: int = 1000,
         level: int = logging.NOTSET,
         _reactor: Optional[IReactorTime] = None,
     ):
         super().__init__(level=level)
         self.host = host
         self.port = port
-        self.maximum_buffer = maximum_buffer
 
         self._buffer: deque[logging.LogRecord] = deque()
         self._connection_waiter: Deferred | None = None
@@ -202,60 +200,8 @@ class RemoteHandler(logging.Handler):
         deferred.addCallbacks(writer, fail)
         self._connection_waiter = deferred
 
-    def _handle_pressure(self) -> None:
-        """
-        Handle backpressure by shedding records.
-
-        The buffer will, in this order, until the buffer is below the maximum:
-            - Shed DEBUG records.
-            - Shed INFO records.
-            - Shed the middle 50% of the records.
-        """
-        if len(self._buffer) <= self.maximum_buffer:
-            return
-
-        # Strip out DEBUGs
-        self._buffer = deque(
-            filter(lambda record: record.levelno > logging.DEBUG, self._buffer)
-        )
-
-        if len(self._buffer) <= self.maximum_buffer:
-            return
-
-        # Strip out INFOs
-        self._buffer = deque(
-            filter(lambda record: record.levelno > logging.INFO, self._buffer)
-        )
-
-        if len(self._buffer) <= self.maximum_buffer:
-            return
-
-        # Cut the middle entries out
-        buffer_split = floor(self.maximum_buffer / 2)
-
-        old_buffer = self._buffer
-        self._buffer = deque()
-
-        for _ in range(buffer_split):
-            self._buffer.append(old_buffer.popleft())
-
-        end_buffer = []
-        for _ in range(buffer_split):
-            end_buffer.append(old_buffer.pop())
-
-        self._buffer.extend(reversed(end_buffer))
-
     def emit(self, record: logging.LogRecord) -> None:
         self._buffer.append(record)
-
-        # Handle backpressure, if it exists.
-        try:
-            self._handle_pressure()
-        except Exception:
-            # If handling backpressure fails, clear the buffer and log the
-            # exception.
-            self._buffer.clear()
-            logger.warning("Failed clearing backpressure")
 
         # Try and write immediately.
         self._connect()

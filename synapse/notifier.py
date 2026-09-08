@@ -63,7 +63,6 @@ from synapse.util.async_helpers import (
     timeout_deferred,
 )
 from synapse.util.duration import Duration
-from synapse.util.stringutils import shortstr
 from synapse.visibility import filter_and_transform_events_for_client
 
 if TYPE_CHECKING:
@@ -562,8 +561,8 @@ class Notifier:
             {
                 "waking_up_explicit_users": len(users),
                 "waking_up_explicit_rooms": len(rooms),
-                "users": shortstr(users),
-                "rooms": shortstr(rooms),
+                "users": list(users),
+                "rooms": list(rooms),
                 "stream": stream_key,
                 "stream_id": new_token,
             }

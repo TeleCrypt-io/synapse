@@ -24,11 +24,9 @@ handlers:
 
   # example output to file - to enable, edit 'root' config below.
   file:
-    class: logging.handlers.RotatingFileHandler
+    class: logging.FileHandler
     formatter: fmt
     filename: /var/log/synapse/homeserver.log
-    maxBytes: 100000000
-    backupCount: 3
     filters: [context]
     encoding: utf8
 

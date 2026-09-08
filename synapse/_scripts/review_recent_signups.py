@@ -184,12 +184,7 @@ def main() -> None:
         if include_context:
             print_public_rooms = ""
             if user_info.public_rooms:
-                print_public_rooms = "(" + ", ".join(user_info.public_rooms[:3])
-
-                if len(user_info.public_rooms) > 3:
-                    print_public_rooms += ", ..."
-
-                print_public_rooms += ")"
+                print_public_rooms = "(" + ", ".join(user_info.public_rooms) + ")"
 
             print("# Created:", datetime.fromtimestamp(user_info.creation_ts))
             print("# Email:", ", ".join(user_info.emails) or "None")

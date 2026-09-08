@@ -57,7 +57,6 @@ from synapse.util.async_helpers import Linearizer
 from synapse.util.caches.expiringcache import ExpiringCache
 from synapse.util.duration import Duration
 from synapse.util.metrics import Measure, measure_func
-from synapse.util.stringutils import shortstr
 
 if TYPE_CHECKING:
     from synapse.server import HomeServer
@@ -718,7 +717,7 @@ class StateResolutionHandler:
             )
             if missing_state_groups:
                 raise Exception(
-                    f"State groups have been deleted: {shortstr(missing_state_groups)}"
+                    f"State groups have been deleted: {list(missing_state_groups)}"
                 )
 
             state_groups_histogram.labels(

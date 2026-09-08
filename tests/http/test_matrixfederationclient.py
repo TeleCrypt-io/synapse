@@ -37,7 +37,6 @@ from synapse.api.ratelimiting import Ratelimiter
 from synapse.config._base import ConfigError
 from synapse.config.ratelimiting import RatelimitSettings
 from synapse.http.matrixfederationclient import (
-    ByteParser,
     MatrixFederationHttpClient,
     MatrixFederationRequest,
 )
@@ -714,61 +713,6 @@ class FederationClientTests(HomeserverTestCase):
 
         f = self.failureResultOf(test_d)
         self.assertIsInstance(f.value, RequestSendFailed)
-
-    def test_too_big(self) -> None:
-        """
-        Test what happens if a huge response is returned from the remote endpoint.
-        """
-
-        test_d = defer.ensureDeferred(self.cl.get_json("testserv:8008", "foo/bar"))
-
-        self.pump()
-
-        # Nothing happened yet
-        self.assertNoResult(test_d)
-
-        # Make sure treq is trying to connect
-        clients = self.reactor.tcpClients
-        self.assertEqual(len(clients), 1)
-        (host, port, factory, _timeout, _bindAddress) = clients[0]
-        self.assertEqual(host, "1.2.3.4")
-        self.assertEqual(port, 8008)
-
-        # complete the connection and wire it up to a fake transport
-        protocol = factory.buildProtocol(None)
-        transport = StringTransport()
-        protocol.makeConnection(transport)
-
-        # that should have made it send the request to the transport
-        self.assertRegex(transport.value(), b"^GET /foo/bar")
-        self.assertRegex(transport.value(), b"Host: testserv:8008")
-
-        # Deferred is still without a result
-        self.assertNoResult(test_d)
-
-        # Send it a huge HTTP response
-        protocol.dataReceived(
-            b"HTTP/1.1 200 OK\r\nServer: Fake\r\nContent-Type: application/json\r\n\r\n"
-        )
-
-        self.pump()
-
-        # should still be waiting
-        self.assertNoResult(test_d)
-
-        sent = 0
-        chunk_size = 1024 * 512
-        while not test_d.called:
-            protocol.dataReceived(b"a" * chunk_size)
-            sent += chunk_size
-            self.assertLessEqual(sent, ByteParser.MAX_RESPONSE_SIZE)
-
-        self.assertEqual(sent, ByteParser.MAX_RESPONSE_SIZE)
-
-        f = self.failureResultOf(test_d)
-        self.assertIsInstance(f.value, RequestSendFailed)
-
-        self.assertTrue(transport.disconnecting)
 
     def test_build_auth_headers_rejects_falsey_destinations(self) -> None:
         with self.assertRaises(ValueError):

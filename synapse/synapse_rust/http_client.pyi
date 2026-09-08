@@ -40,11 +40,10 @@ class HttpClient:
                 Ensure the upstream server supports HTTP/2 before enabling this.
         """
 
-    def get(self, url: str, response_limit: int) -> Deferred[bytes]: ...
+    def get(self, url: str) -> Deferred[bytes]: ...
     def post(
         self,
         url: str,
-        response_limit: int,
         headers: Mapping[str, str],
         request_body: str,
     ) -> Deferred[bytes]: ...

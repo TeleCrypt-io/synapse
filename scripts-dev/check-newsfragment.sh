@@ -9,7 +9,7 @@ set -e
 
 # make sure that origin/develop is up to date
 git remote set-branches --add origin develop
-git fetch -q origin develop
+git fetch origin develop
 
 pr="$PULL_REQUEST_NUMBER"
 

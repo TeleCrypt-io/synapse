@@ -63,7 +63,6 @@ class RendezvousServletTestCase(unittest.HomeserverTestCase):
     async def _mock_oauth_response(
         self,
         url: str,
-        response_limit: int,
         headers: Mapping[str, str],
         request_body: str,
     ) -> bytes:

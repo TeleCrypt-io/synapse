@@ -159,7 +159,7 @@ class Builder:
                     "kill",
                     c,
                 ],
-                stdout=subprocess.DEVNULL,
+                check=True,
             )
             with self._lock:
                 self.active_containers.remove(c)

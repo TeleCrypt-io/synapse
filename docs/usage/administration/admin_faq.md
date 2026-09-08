@@ -114,7 +114,7 @@ for file in $source_directory/*; do
     filename=$(basename ${file})
     url=$repository_url/_matrix/media/v3/download/$serverName/$filename
     echo "Downloading $filename - $url"
-    if ! wget -o /dev/null -P $target_directory $url; then
+    if ! wget -P $target_directory $url; then
         echo "Could not download $filename"
     fi
 done

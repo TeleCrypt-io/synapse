@@ -1062,11 +1062,6 @@ class SendJoinParser(ByteParser[SendJoinResponse]):
 
     CONTENT_TYPE = "application/json"
 
-    # /send_join responses can be huge, so we override the size limit here. The response
-    # is parsed in a streaming manner, which helps alleviate the issue of memory
-    # usage a bit.
-    MAX_RESPONSE_SIZE = 500 * 1024 * 1024
-
     def __init__(self, room_version: RoomVersion, v1_api: bool):
         self._response = SendJoinResponse([], [], event_dict={})
         self._room_version = room_version
@@ -1136,9 +1131,6 @@ class _StateParser(ByteParser[StateRequestResponse]):
     """
 
     CONTENT_TYPE = "application/json"
-
-    # As with /send_join, /state responses can be huge.
-    MAX_RESPONSE_SIZE = 500 * 1024 * 1024
 
     def __init__(self, room_version: RoomVersion):
         self._response = StateRequestResponse([], [])

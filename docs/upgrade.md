@@ -2662,35 +2662,15 @@ ACME docs.
 
     -   When upgrading to Python 3, you **must** make sure that your log
         files are configured as UTF-8, by adding `encoding: utf8` to the
-        `RotatingFileHandler` configuration (if you have one) in your
-        `<server>.log.config` file. For example, if your `log.config`
-        file contains:
+        `FileHandler` configuration (if you have one) in your
+        `<server>.log.config` file. For example:
 
         ```yaml
         handlers:
           file:
-            class: logging.handlers.RotatingFileHandler
+            class: logging.FileHandler
             formatter: precise
             filename: homeserver.log
-            maxBytes: 104857600
-            backupCount: 10
-            filters: [context]
-          console:
-            class: logging.StreamHandler
-            formatter: precise
-            filters: [context]
-        ```
-
-        Then you should update this to be:
-
-        ```yaml
-        handlers:
-          file:
-            class: logging.handlers.RotatingFileHandler
-            formatter: precise
-            filename: homeserver.log
-            maxBytes: 104857600
-            backupCount: 10
             filters: [context]
             encoding: utf8
           console:

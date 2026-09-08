@@ -53,9 +53,24 @@ def run_until_successful(
     while True:
         completed_process = subprocess.run(command, *args, **kwargs)
         exit_code = completed_process.returncode
+
+        if completed_process.stderr:
+            stderr = completed_process.stderr
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", errors="replace")
+            sys.stderr.write(stderr)
+            sys.stderr.flush()
+
         if exit_code == 0:
             # successful, so nothing more to do here.
             return completed_process
+
+        if completed_process.stdout:
+            stdout = completed_process.stdout
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode("utf-8", errors="replace")
+            sys.stdout.write(stdout)
+            sys.stdout.flush()
 
         print(f"The command {command!r} failed with exit code {exit_code}.")
         print("Please try to correct the failure and then re-run.")
@@ -296,7 +311,7 @@ def _prepare() -> None:
 
     # Show the user the changes and ask if they want to edit the change log.
     synapse_repo.git.add("-u")
-    subprocess.run("git diff --cached", shell=True)
+    subprocess.run("git diff --cached", shell=True, check=True)
 
     print(
         "Consider any upcoming platform deprecations that should be mentioned in the changelog. (e.g. upcoming Python, PostgreSQL or SQLite deprecations)"
@@ -536,7 +551,7 @@ def _upload(gh_token: str | None) -> None:
             urllib.request.urlretrieve(asset_download_url, filename=filename)
 
         if click.confirm("Upload to PyPI?", default=True):
-            subprocess.run("twine upload *", shell=True, cwd=tmpdir)
+            subprocess.run("twine upload *", shell=True, cwd=tmpdir, check=True)
 
     click.echo(
         f"Done! Remember to merge the tag {tag_name} into the appropriate branches"

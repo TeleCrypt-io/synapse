@@ -22,7 +22,6 @@ pub mod push;
 pub mod rendezvous;
 pub mod room_versions;
 pub mod segmenter;
-pub mod storage;
 pub mod tokio_runtime;
 pub mod types;
 

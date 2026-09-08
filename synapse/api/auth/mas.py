@@ -232,7 +232,6 @@ class MasDelegatedAuth(BaseAuth):
                 inject_request_headers(raw_headers)
                 resp_body = await self._rust_http_client.post(
                     url=self._introspection_endpoint,
-                    response_limit=1 * 1024 * 1024,
                     headers=raw_headers,
                     request_body=body,
                 )

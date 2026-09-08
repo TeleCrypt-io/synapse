@@ -70,3 +70,8 @@ class ConfigGenerationTestCase(unittest.TestCase):
             matches = re.findall(r"^\s*filename:\s*(.*)$", config, re.M)
             self.assertEqual(1, len(matches))
             self.assertEqual(matches[0], expected)
+            self.assertIn("class: logging.FileHandler", config)
+            self.assertNotIn("RotatingFileHandler", config)
+            self.assertNotIn("TimedRotatingFileHandler", config)
+            self.assertNotIn("backupCount", config)
+            self.assertNotIn("maxBytes", config)

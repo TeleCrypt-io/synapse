@@ -13,17 +13,10 @@
  *
  */
 
-use std::{
-    future::Future,
-    sync::{Arc, Mutex},
-};
+use std::future::Future;
 
 use once_cell::sync::OnceCell;
-use pyo3::{
-    create_exception, exceptions::PyException, exceptions::PyRuntimeError, intern, prelude::*,
-    types::PyCFunction,
-};
-use tokio::sync::oneshot;
+use pyo3::{create_exception, exceptions::PyException, prelude::*};
 
 use crate::tokio_runtime::runtime;
 
@@ -68,35 +61,10 @@ fn logging_context_module(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
         .bind(py))
 }
 
-/// Set the Synapse logcontext active on the current (reactor) thread, returning
-/// the context that was previously active so it can be restored afterwards.
-fn set_current_logging_context<'py>(
-    py: Python<'py>,
-    context: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
-    logging_context_module(py)?.call_method1(intern!(py, "set_current_context"), (context,))
-}
-
-tokio::task_local! {
-    /// The Synapse `LoggingContext` that was active on the reactor thread when
-    /// the Rust future was created (see [`create_deferred`]).
-    ///
-    /// Synapse attributes per-request CPU/DB usage via a thread-local
-    /// `LoggingContext`, but our work runs on a Tokio worker thread that is
-    /// detached from it. We stash the originating context here so that whenever
-    /// we hop back onto the reactor thread to drive Python work (see
-    /// [`run_python_awaitable`]) we can re-activate it; otherwise that work runs in
-    /// the sentinel context and its resource usage (e.g. database time) is lost
-    /// instead of being charged to the request.
-    static LOGGING_CONTEXT: Py<PyAny>;
-}
-
 /// Creates a twisted deferred from the given future, spawning the task on the
 /// tokio runtime.
 ///
-/// Captures the Synapse logcontext active on the reactor thread so work driven by
-/// the future is attributed to the originating request. Does not handle deferred
-/// cancellation or contextvars.
+/// Does not handle deferred cancellation or contextvars.
 pub fn create_deferred<'py, F, O>(
     py: Python<'py>,
     reactor: &Bound<'py, PyAny>,
@@ -110,15 +78,9 @@ where
     let deferred_callback = deferred.getattr("callback")?.unbind();
     let deferred_errback = deferred.getattr("errback")?.unbind();
 
-    // Capture the logcontext while we're still on the reactor thread, so the
-    // spawned task can re-apply it when it hops back to drive Python work.
-    let logging_context = logging_context_module(py)?
-        .call_method0(intern!(py, "current_context"))?
-        .unbind();
-
     let rt = runtime(reactor)?;
     let handle = rt.handle()?;
-    let task = handle.spawn(LOGGING_CONTEXT.scope(logging_context, fut));
+    let task = handle.spawn(fut);
 
     // Unbind the reactor so that we can pass it to the task
     let reactor = reactor.clone().unbind();
@@ -156,167 +118,6 @@ where
 
     // Make the deferred follow the Synapse logcontext rules
     make_deferred_yieldable(py, &deferred)
-}
-
-/// Runs a Python awaitable to completion on the Twisted reactor and resolves
-/// with its result.
-///
-/// This is the inverse of [`create_deferred`]: where that turns a Rust future
-/// into a Twisted `Deferred`, this turns a Python awaitable into a Rust future.
-///
-/// Despite returning a future, the awaitable is kicked off in the background running in
-/// the Twisted reactor and runs to completion regardless of whether the returned Rust
-/// future is ever polled; awaiting it only observes the result.
-///
-/// The awaitable is started in the logcontext associated with the current Rust task,
-/// so database usage and logging remain correlated with the originating request.
-pub(crate) async fn run_python_awaitable<F>(
-    reactor: Py<PyAny>,
-    make_awaitable: F,
-) -> PyResult<Py<PyAny>>
-where
-    F: for<'py> Fn(Python<'py>) -> PyResult<Bound<'py, PyAny>> + Send + 'static,
-{
-    // Resolves when the awaitable completes; carries the resolved value or error.
-    let (tx, rx) = oneshot::channel::<PyResult<Py<PyAny>>>();
-    // Shared between the success and error callbacks (only one ever fires).
-    let sender = Arc::new(Mutex::new(Some(tx)));
-
-    // The logcontext that is active for this async Rust task. This function is
-    // only valid for futures spawned by `create_deferred`, which establishes the
-    // task-local context. Fail before scheduling any Python work if that invariant
-    // is violated.
-    let rust_task_logging_context = LOGGING_CONTEXT
-        .try_with(|ctx| Python::attach(|py| ctx.clone_ref(py)))
-        .map_err(|_| {
-            PyRuntimeError::new_err(
-                "run_python_awaitable called outside a create_deferred Rust task",
-            )
-        })?;
-
-    Python::attach(|py| -> PyResult<()> {
-        // Create some deferred success/error callback functions that we will use to get
-        // the result from Python to Rust.
-        let success_sender = Arc::clone(&sender);
-        let on_success = PyCFunction::new_closure(
-            py,
-            None,
-            None,
-            move |args, _kwargs| -> PyResult<Py<PyAny>> {
-                let value = args.get_item(0)?.unbind();
-                if let Some(tx) = success_sender
-                    .lock()
-                    .map_err(|err| {
-                        anyhow::anyhow!("Failed to acquire lock on `success_sender`: {:#}", err)
-                    })?
-                    .take()
-                {
-                    let _ = tx.send(Ok(value));
-                }
-                Ok(args.py().None())
-            },
-        )?
-        .unbind();
-
-        let error_sender = Arc::clone(&sender);
-        let on_error = PyCFunction::new_closure(
-            py,
-            None,
-            None,
-            move |args, _kwargs| -> PyResult<Py<PyAny>> {
-                let err = failure_to_pyerr(&args.get_item(0)?);
-                if let Some(tx) = error_sender
-                    .lock()
-                    .map_err(|err| {
-                        anyhow::anyhow!("Failed to acquire lock on `error_sender`: {:#}", err)
-                    })?
-                    .take()
-                {
-                    let _ = tx.send(Err(err));
-                }
-                Ok(args.py().None())
-            },
-        )?
-        .unbind();
-
-        // Wrap `make_awaitable` as a Python callable so `run_in_background`
-        // invokes it in the active logcontext and drives the resulting awaitable.
-        let awaitable_factory = PyCFunction::new_closure(
-            py,
-            None,
-            None,
-            move |args, _kwargs| -> PyResult<Py<PyAny>> {
-                let py = args.py();
-                Ok(make_awaitable(py)?.unbind())
-            },
-        )?
-        .unbind();
-
-        // Create a function that we will run with the Twisted reactor that will drive
-        // the Python awaitable.
-        let starter = PyCFunction::new_closure(
-            py,
-            None,
-            None,
-            move |args, _kwargs| -> PyResult<Py<PyAny>> {
-                let py = args.py();
-
-                // Activate the context captured when the Rust task was created while
-                // the awaitable is kicked off. `run_in_background` then preserves the
-                // context for the awaitable and resets the reactor to its prior context.
-                let previous_context =
-                    set_current_logging_context(py, rust_task_logging_context.bind(py))?;
-
-                let deferred = logging_context_module(py)?.call_method1(
-                    intern!(py, "run_in_background"),
-                    (awaitable_factory.bind(py),),
-                );
-
-                // Restore the reactor's context even if starting the awaitable failed.
-                set_current_logging_context(py, &previous_context)?;
-
-                let deferred = deferred?;
-                deferred.call_method1(
-                    intern!(py, "addCallbacks"),
-                    (on_success.bind(py), on_error.bind(py)),
-                )?;
-                Ok(py.None())
-            },
-        )?;
-
-        reactor
-            .bind(py)
-            .call_method1(intern!(py, "callFromThread"), (starter,))?;
-
-        Ok(())
-    })?;
-
-    match rx.await {
-        Ok(result) => result,
-        Err(_) => Err(PyRuntimeError::new_err(
-            "run_python_awaitable channel closed before the awaitable completed",
-        )),
-    }
-}
-
-/// Convert a Twisted `Failure` (as passed to an Deferred errback) into a [`PyErr`].
-///
-/// A Twisted `Failure` carries the original exception instance in its `.value`
-/// attribute, which we re-raise so callers see the real error. If the `Failure` is
-/// mangled, we fallback to raising a generic [`PyRuntimeError`] explaining what we saw
-/// instead.
-fn failure_to_pyerr(failure: &Bound<'_, PyAny>) -> PyErr {
-    match failure.getattr(intern!(failure.py(), "value")) {
-        Ok(value) => PyErr::from_value(value),
-        Err(_) => PyRuntimeError::new_err(format!(
-            "Expected Python object passed here to be a Twisted `Failure` with a `value` attribute \
-            but saw something else: {}",
-            failure
-                .str()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| "<failed to stringify Python object>".to_owned()),
-        )),
-    }
 }
 
 static MAKE_DEFERRED_YIELDABLE: OnceCell<Py<PyAny>> = OnceCell::new();

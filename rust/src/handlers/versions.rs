@@ -21,7 +21,6 @@ use serde::Serialize;
 
 use crate::config::{types::RoomCreationPreset, SynapseHomeServerConfig};
 use crate::deferred::create_deferred;
-use crate::storage::store::{PerUserExperimentalFeature, Store};
 
 /// `GET /_matrix/client/versions` response
 #[derive(Serialize, Clone, Debug)]
@@ -44,7 +43,6 @@ impl<'py> IntoPyObject<'py> for VersionsResponse {
 #[pyclass]
 pub struct VersionsHandler {
     pub global_unstable_feature_map: Arc<UnstableFeatureMap>,
-    pub store: Arc<Store>,
     /// The Twisted reactor, used to bridge our `async` response back into a
     /// Twisted deferred that Python can `await`.
     pub reactor: Py<PyAny>,
@@ -54,79 +52,18 @@ pub struct VersionsHandler {
 impl VersionsHandler {
     /// Assemble a `/versions` response, returning a Twisted deferred that
     /// resolves to the response body (a dict).
-    #[pyo3(signature = (user_id=None))]
-    fn get_versions<'py>(
-        &self,
-        py: Python<'py>,
-        user_id: Option<String>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let store = Arc::clone(&self.store);
+    fn get_versions<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let global_unstable_feature_map = Arc::clone(&self.global_unstable_feature_map);
 
         create_deferred(py, self.reactor.bind(py), async move {
-            build_versions_response(&store, &global_unstable_feature_map, user_id.as_deref())
-                .await
-                .map_err(|err| {
-                    pyo3::exceptions::PyRuntimeError::new_err(format!(
-                        "Failed to build /versions response: {err:#}"
-                    ))
-                })
+            Ok(build_versions_response(&global_unstable_feature_map))
         })
     }
 }
 
 /// Assemble a `/versions` response body.
-///
-/// Args:
-///  * store
-///  * global_unstable_feature_map: The global values before any per-user overrides
-///  * user_id: The user making the request
-async fn build_versions_response(
-    store: &Store,
-    global_unstable_feature_map: &UnstableFeatureMap,
-    user_id: Option<&str>,
-) -> Result<VersionsResponse, anyhow::Error> {
-    let msc3881_enabled = match user_id {
-        Some(user_id) => {
-            // Don't both looking anything up if it's enabled for everyone
-            if global_unstable_feature_map.msc3881 {
-                true
-            } else {
-                // Look up whether it's explicitly enabled/disabled for this user
-                store
-                    .is_feature_enabled_for_user(user_id, PerUserExperimentalFeature::MSC3881)
-                    .await?
-                    // Default to false if there is no entry for this user
-                    .unwrap_or(false)
-            }
-        }
-        None => global_unstable_feature_map.msc3881,
-    };
-
-    let msc3575_enabled = match user_id {
-        Some(user_id) => {
-            // Don't both looking anything up if it's enabled for everyone
-            if global_unstable_feature_map.msc3575 {
-                true
-            } else {
-                // Look up whether it's explicitly enabled/disabled for this user
-                store
-                    .is_feature_enabled_for_user(user_id, PerUserExperimentalFeature::MSC3575)
-                    .await?
-                    // Default to false if there is no entry for this user
-                    .unwrap_or(false)
-            }
-        }
-        None => global_unstable_feature_map.msc3575,
-    };
-
-    let unstable_feature_map = UnstableFeatureMap {
-        msc3575: msc3575_enabled,
-        msc3881: msc3881_enabled,
-        ..*global_unstable_feature_map
-    };
-
-    Ok(VersionsResponse {
+fn build_versions_response(global_unstable_feature_map: &UnstableFeatureMap) -> VersionsResponse {
+    VersionsResponse {
         versions: Vec::from([
             // XXX: at some point we need to decide whether we need to include
             // the previous version numbers, given we've defined r0.3.0 to be
@@ -156,8 +93,8 @@ async fn build_versions_response(
             "v1.11".to_string(),
             "v1.12".to_string(),
         ]),
-        unstable_features: unstable_feature_map,
-    })
+        unstable_features: global_unstable_feature_map.clone(),
+    }
 }
 
 /// Experimental features the server supports

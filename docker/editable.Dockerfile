@@ -17,7 +17,7 @@ FROM docker.io/library/python:${PYTHON_VERSION}-slim-trixie
 RUN \
    --mount=type=cache,target=/var/cache/apt,sharing=locked \
    --mount=type=cache,target=/var/lib/apt,sharing=locked \
- apt-get update -qq && apt-get install -yqq \
+ apt-get update && apt-get install -y \
     build-essential \
     libffi-dev \
     libjpeg-dev \
@@ -41,7 +41,7 @@ ENV RUSTUP_HOME=/rust
 ENV CARGO_HOME=/cargo
 ENV PATH=/cargo/bin:/rust/bin:$PATH
 RUN mkdir /rust /cargo
-RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain stable --profile minimal
+RUN curl -Sf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain stable --profile minimal
 
 
 # Make a base copy of the editable source tree, so that we have something to

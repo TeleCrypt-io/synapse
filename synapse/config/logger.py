@@ -74,11 +74,9 @@ formatters:
 
 handlers:
     file:
-        class: logging.handlers.TimedRotatingFileHandler
+        class: logging.FileHandler
         formatter: precise
         filename: ${log_file}
-        when: midnight
-        backupCount: 3  # Does not include the current log file.
         encoding: utf8
 
     # Default to buffering writes to log file for efficiency.

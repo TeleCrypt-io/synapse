@@ -36,8 +36,6 @@ from synapse.config.logger import _setup_stdlib_logging, one_time_logging_setup
 from synapse.logging import RemoteHandler
 from synapse.synapse_rust import reset_logging_config
 from synapse.types import ISynapseReactor
-from synapse.util.clock import Clock
-from synapse.util.duration import Duration
 
 
 class LineCounter(LineOnlyReceiver):
@@ -73,9 +71,6 @@ async def main(reactor: ISynapseReactor, loops: int) -> float:
 
     # A fake homeserver config.
     class Config:
-        class server:
-            server_name = "synmark-" + str(loops)
-
         # This odd construct is to avoid mypy thinking that logging escapes the
         # scope of Config.
         class _logging:
@@ -84,11 +79,6 @@ async def main(reactor: ISynapseReactor, loops: int) -> float:
         logging = _logging
 
     hs_config = Config()
-
-    # To be able to sleep.
-    # Ignore linter error here since we are running outside of the context of a
-    # Synapse `HomeServer`.
-    clock = Clock(reactor, server_name=hs_config.server.server_name)  # type: ignore[multiple-internal-clocks]
 
     errors = StringIO()
     publisher = LogPublisher()
@@ -109,7 +99,6 @@ async def main(reactor: ISynapseReactor, loops: int) -> float:
                 "formatter": "tersejson",
                 "host": address.host,
                 "port": address.port,
-                "maximum_buffer": 100,
             }
         },
     }
@@ -139,10 +128,6 @@ async def main(reactor: ISynapseReactor, loops: int) -> float:
     # Send a bunch of useful messages
     for i in range(loops):
         logger.info("test message %s", i)
-
-        if len(handler._buffer) == handler.maximum_buffer:
-            while len(handler._buffer) > handler.maximum_buffer / 2:
-                await clock.sleep(Duration(milliseconds=10))
 
     await logger_factory.on_done
 

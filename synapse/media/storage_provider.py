@@ -210,7 +210,11 @@ class FileStorageProviderBackend(StorageProvider):
     async def store_file(self, path: str, file_info: FileInfo) -> None:
         """See StorageProvider.store_file"""
 
-        primary_fname = os.path.join(self.cache_directory, path)
+        primary_fname = (
+            file_info.upload_path
+            if file_info.upload_path is not None
+            else os.path.join(self.cache_directory, path)
+        )
         backup_fname = os.path.join(self.base_directory, path)
 
         dirname = os.path.dirname(backup_fname)

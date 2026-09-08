@@ -45,15 +45,11 @@ set -e
 # updated to use Docker Engine 29.0.0+ which uses `containerd` by default for new
 # installations.
 #
-# XXX: If the Docker image name changes, don't forget to update
-# `.github/workflows/push_complement_image.yml` as well
 LOCAL_IMAGE_NAMESPACE=localhost
 
 # The image tags for how these images will be stored in the registry
 SYNAPSE_IMAGE_PATH="$LOCAL_IMAGE_NAMESPACE/synapse"
 SYNAPSE_WORKERS_IMAGE_PATH="$LOCAL_IMAGE_NAMESPACE/synapse-workers"
-# XXX: If the Docker image name changes, don't forget to update
-# `.github/workflows/push_complement_image.yml` as well
 COMPLEMENT_SYNAPSE_IMAGE_PATH="$LOCAL_IMAGE_NAMESPACE/complement-synapse"
 
 SYNAPSE_EDITABLE_IMAGE_PATH="$LOCAL_IMAGE_NAMESPACE/synapse-editable"
@@ -162,7 +158,7 @@ main() {
     echo "COMPLEMENT_DIR not set. Fetching Complement checkout from ${COMPLEMENT_REF}..."
     
     # Download the Complement checkout at the specified ref.
-    wget -q https://github.com/matrix-org/complement/archive/${COMPLEMENT_REF}.tar.gz
+    wget https://github.com/matrix-org/complement/archive/${COMPLEMENT_REF}.tar.gz
 
     # Delete the existing complement checkout. Otherwise we'll end up with stale
     # test files after they're deleted server-side, and `tar` will not delete

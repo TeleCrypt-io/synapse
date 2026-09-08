@@ -465,9 +465,7 @@ build-backend = "maturin"
 # See https://cibuildwheel.readthedocs.io/en/stable/options/#build-skip for the
 # list of supported build targets.
 #
-# Also see `.github/workflows/release-artifacts.yml` for the list of
-# architectures we build for (based on the runner OS types we use), as well as
-# the platforms we exclude from testing in CI.
+# The platforms excluded here are also excluded from testing in CI.
 #
 # We skip:
 #  - free-threaded cpython builds: these are not currently supported.

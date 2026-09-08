@@ -30,7 +30,6 @@ from synapse.storage.database import (
     make_in_list_sql_clause,
 )
 from synapse.storage.engines import PostgresEngine
-from synapse.util.stringutils import shortstr
 
 if TYPE_CHECKING:
     from synapse.server import HomeServer
@@ -274,7 +273,7 @@ class StateDeletionDataStore:
         missing_state_groups = state_groups - existing_state_groups
         if missing_state_groups:
             raise Exception(
-                f"state groups have been deleted: {shortstr(missing_state_groups)}"
+                f"state groups have been deleted: {list(missing_state_groups)}"
             )
 
         self.db_pool.simple_insert_many_txn(

@@ -126,11 +126,6 @@ class ByteParser(ByteWriteable, Generic[T], abc.ABC):
     the content type doesn't match we fail the request.
     """
 
-    # a federation response can be rather large (eg a big state_ids is 50M or so), so we
-    # need a generous limit here.
-    MAX_RESPONSE_SIZE: int = 100 * 1024 * 1024
-    """The largest response this parser will accept."""
-
     @abc.abstractmethod
     def finish(self) -> T:
         """Called when response has finished streaming and the parser should
@@ -290,13 +285,11 @@ async def _handle_response(
         The parsed response
     """
 
-    max_response_size = parser.MAX_RESPONSE_SIZE
-
     finished = False
     try:
         check_content_type_is(response.headers, parser.CONTENT_TYPE)
 
-        d = read_body_with_max_size(response, parser, max_response_size)
+        d = read_body_with_max_size(response, parser, None)
         d = timeout_deferred(
             deferred=d,
             timeout=timeout_sec,
@@ -307,17 +300,6 @@ async def _handle_response(
 
         finished = True
         value = parser.finish()
-    except BodyExceededMaxSize as e:
-        # The response was too big.
-        logger.warning(
-            "{%s} [%s] JSON response exceeded max size %i - %s %s",
-            request.txn_id,
-            request.destination,
-            max_response_size,
-            request.method,
-            request.uri.decode("ascii"),
-        )
-        raise RequestSendFailed(e, can_retry=False) from e
     except ValueError as e:
         # The content was invalid.
         logger.warning(

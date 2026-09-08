@@ -19,7 +19,6 @@
 #
 #
 import contextlib
-import errno
 import hashlib
 import json
 import logging
@@ -52,6 +51,7 @@ from synapse.api.errors import NotFoundError
 from synapse.logging.context import defer_to_thread, run_in_background
 from synapse.logging.opentracing import start_active_span, trace, trace_with_opname
 from synapse.media.storage_provider import FileStorageProviderBackend
+from synapse.util import ExceptionBundle
 from synapse.util.clock import Clock
 from synapse.util.duration import Duration
 from synapse.util.file_consumer import BackgroundFileConsumer
@@ -244,16 +244,10 @@ class MediaStorage:
 
         try:
             os.remove(path)
-        except OSError as error:
-            if error.errno == errno.ENOENT:
-                # A provider may have removed the source after a completed write.
-                # There is no residue in this case, so cleanup is complete.
-                return
-            logger.exception("Failed to remove temporary media file %s", path)
-            raise
-        except Exception:
-            logger.exception("Failed to remove temporary media file %s", path)
-            raise
+        except FileNotFoundError:
+            # A provider may have removed the source after a completed write.
+            # There is no residue in this case, so cleanup is complete.
+            return
 
     @trace_with_opname("MediaStorage.store_into_file")
     @contextlib.asynccontextmanager
@@ -282,6 +276,7 @@ class MediaStorage:
         path = self._file_info_to_path(file_info)
         is_temp_file = False
         media_filepath: str | None = None
+        cleanup_attempted = False
 
         try:
             if self.local_provider:
@@ -327,25 +322,27 @@ class MediaStorage:
 
                 # If using a temp file, delete it after uploading to storage providers
                 if is_temp_file:
+                    cleanup_attempted = True
                     self._remove_media_temp_file(media_filepath)
 
-        except BaseException as e:
-            if media_filepath is not None:
+        except BaseException as primary_error:
+            if media_filepath is not None and not cleanup_attempted:
+                cleanup_attempted = True
                 try:
                     if is_temp_file:
                         self._remove_media_temp_file(media_filepath)
                     else:
                         os.remove(media_filepath)
-                except Exception:
-                    # Preserve the original storage failure. There is no metadata
-                    # success on this path, but leave an explicit operational signal
-                    # if the best-effort failure cleanup also cannot remove the file.
-                    logger.exception(
-                        "Failed to clean up media file after storage failure: %s",
-                        media_filepath,
-                    )
+                except Exception as cleanup_error:
+                    raise ExceptionBundle(
+                        "media storage and cleanup failed",
+                        cast(
+                            Sequence[Exception],
+                            [primary_error, cleanup_error],
+                        ),
+                    ) from primary_error
 
-            raise e from None
+            raise
 
     async def delete_files(self, file_infos: Sequence[FileInfo]) -> None:
         """Delete exact originals/thumbnails from every configured provider.
@@ -463,12 +460,35 @@ class MediaStorage:
                 for path in paths:
                     remote_res: Any = await provider.fetch(path, file_info)
                     if remote_res:
-                        with remote_res:
-                            consumer = BackgroundFileConsumer(
-                                open(local_path, "wb"), self.reactor
-                            )
-                            await remote_res.write_to_consumer(consumer)
-                            await consumer.wait()
+                        temp_path: str | None = None
+                        try:
+                            with tempfile.NamedTemporaryFile(
+                                dir=os.path.dirname(local_path),
+                                prefix=f".{os.path.basename(local_path)}-",
+                                delete=False,
+                            ) as temp_file:
+                                temp_path = temp_file.name
+                            assert temp_path is not None
+                            with remote_res:
+                                with open(temp_path, "wb") as output:
+                                    consumer = BackgroundFileConsumer(output, self.reactor)
+                                    await remote_res.write_to_consumer(consumer)
+                                    await consumer.wait()
+                            os.replace(temp_path, local_path)
+                            temp_path = None
+                        except BaseException as primary_error:
+                            if temp_path is not None:
+                                try:
+                                    self._remove_media_temp_file(temp_path)
+                                except Exception as cleanup_error:
+                                    raise ExceptionBundle(
+                                        "media cache download and cleanup failed",
+                                        cast(
+                                            Sequence[Exception],
+                                            [primary_error, cleanup_error],
+                                        ),
+                                    ) from primary_error
+                            raise
                         yield local_path
                         return
 
@@ -492,12 +512,22 @@ class MediaStorage:
                                 await res.write_to_consumer(consumer)
                                 await consumer.wait()
                             yield temp_path
-                        finally:
+                        except BaseException as primary_error:
                             if temp_path:
                                 try:
-                                    os.remove(temp_path)
-                                except Exception:
-                                    pass
+                                    self._remove_media_temp_file(temp_path)
+                                except Exception as cleanup_error:
+                                    raise ExceptionBundle(
+                                        "media download and cleanup failed",
+                                        cast(
+                                            Sequence[Exception],
+                                            [primary_error, cleanup_error],
+                                        ),
+                                    ) from primary_error
+                            raise
+                        else:
+                            if temp_path:
+                                self._remove_media_temp_file(temp_path)
                         return
 
             raise NotFoundError()

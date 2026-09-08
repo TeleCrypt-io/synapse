@@ -22,7 +22,7 @@ env:
 
 jobs:
   complement:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     strategy:
       fail-fast: false
@@ -39,7 +39,7 @@ jobs:
 
     steps:
       - name: Checkout synapse codebase
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
         with:
           path: synapse
 
@@ -50,13 +50,10 @@ jobs:
         shell: bash
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # master
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-
+        run: synapse/.ci/scripts/setup_rust_toolchain.sh "${{ env.RUST_VERSION }}"
+      - uses: Swatinem/rust-cache@v2.9.1
       # We use `poetry` in `complement.sh`
-      - uses: matrix-org/setup-python-poetry@5bbf6603c5c930615ec8a29f1b5d7d258d905aa4 # v2.0.0
+      - uses: matrix-org/setup-python-poetry@v2.0.0
         with:
           poetry-version: "2.4.1"
           # Matches the `path` where we checkout Synapse above
@@ -65,7 +62,7 @@ jobs:
       - name: Prepare Complement's Prerequisites
         run: synapse/.ci/scripts/setup_complement_prerequisites.sh
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           cache-dependency-path: complement/go.sum
           go-version-file: complement/go.mod
@@ -196,7 +193,7 @@ jobs:
         # Always upload the logs (as artifacts) if we attempted to run the
         # Complement tests, so we can debug failures without scrolling through
         # the (very large) raw output in the build log.
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         if: ${{ always() }}
         with:
           # The matrix values keep the name unique across the three matrix

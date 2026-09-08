@@ -20,15 +20,15 @@ FROM ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-${DEBIAN_VERSION} AS deps_base
 
     # The upstream redis-server deb has fewer dynamic libraries than Debian's package which makes it easier to copy later on
     RUN \
-      curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg && \
+      curl -fSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg && \
       chmod 644 /usr/share/keyrings/redis-archive-keyring.gpg && \
       echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb ${DEBIAN_VERSION} main" | tee /etc/apt/sources.list.d/redis.list
 
     RUN \
        --mount=type=cache,target=/var/cache/apt,sharing=locked \
        --mount=type=cache,target=/var/lib/apt,sharing=locked \
-      apt-get update -qq && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -yqq --no-install-recommends \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
           nginx-light \
           redis-server="6:${REDIS_VERSION}.*" redis-tools="6:${REDIS_VERSION}.*" \
           # libicu is required by postgres, see `docker/complement/Dockerfile`

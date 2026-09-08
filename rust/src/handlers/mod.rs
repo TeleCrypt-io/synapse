@@ -22,8 +22,6 @@ use pyo3::{
 };
 
 use crate::config::SynapseHomeServerConfig;
-use crate::storage::db::python_db_pool::PythonDatabasePoolWrapper;
-use crate::storage::store::Store;
 
 pub mod versions;
 
@@ -39,21 +37,8 @@ impl RustHandlers {
     pub fn py_new(py: Python<'_>, homeserver: &Bound<'_, PyAny>) -> PyResult<RustHandlers> {
         let config: SynapseHomeServerConfig = homeserver.getattr("config")?.extract()?;
 
-        // The Twisted reactor, used both to drive our Tokio runtime and to
-        // marshal database work back onto the reactor thread.
+        // The Twisted reactor is used to drive our Tokio runtime.
         let reactor = homeserver.call_method0("get_reactor")?.unbind();
-
-        // hs.get_datastores().main.db_pool
-        let db_pool_py = homeserver
-            .call_method0("get_datastores")?
-            .getattr("main")?
-            .getattr("db_pool")?;
-        let db_pool = PythonDatabasePoolWrapper::new(&db_pool_py, reactor.clone_ref(py))?;
-
-        // Store is shared across all of the handlers so let's use an `Arc`
-        let store = Arc::new(Store {
-            db_pool: Box::new(db_pool),
-        });
 
         let global_unstable_feature_map = Arc::new(
             versions::synapse_config_to_global_unstable_feature_map(&config),
@@ -63,7 +48,6 @@ impl RustHandlers {
             py,
             versions::VersionsHandler {
                 global_unstable_feature_map: Arc::clone(&global_unstable_feature_map),
-                store: Arc::clone(&store),
                 reactor: reactor.clone_ref(py),
             },
         )?;

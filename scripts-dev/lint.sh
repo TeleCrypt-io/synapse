@@ -106,11 +106,10 @@ set -x
 ./scripts-dev/config-lint.sh
 
 # Catch any common programming mistakes in Python code.
-# --quiet suppresses the update check.
-ruff check --quiet --fix "${files[@]}"
+ruff check --fix "${files[@]}"
 
 # Reformat Python code.
-ruff format --quiet "${files[@]}"
+ruff format "${files[@]}"
 
 # Catch any common programming mistakes in Rust code.
 #
@@ -126,7 +125,7 @@ ruff format --quiet "${files[@]}"
 # Using --fix has a tendency to cause subsequent runs of clippy to recompile
 # rust code, which can slow down this script. Thus we run clippy without --fix
 # first which is quick, and then re-run it with --fix if an error was found.
-if ! cargo-clippy --bins --examples --lib --tests -- -D warnings > /dev/null 2>&1; then
+if ! cargo-clippy --bins --examples --lib --tests -- -D warnings; then
   cargo-clippy \
     --bins --examples --lib --tests --allow-staged --allow-dirty --fix -- -D warnings
 fi

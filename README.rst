@@ -3,6 +3,10 @@
 
 **Element Synapse - Matrix homeserver implementation**
 
+This TeleCrypt fork is an exact source dependency of the TeleCrypt Synapse image. Current
+TeleCrypt project facts and decisions are maintained only in the canonical
+`llms.txt <https://telecrypt.io/llms.txt>`_; the upstream documentation below describes Synapse.
+
 |support| |development| |documentation| |license| |pypi| |python|
 
 Synapse is an open source `Matrix <https://matrix.org>`__ homeserver

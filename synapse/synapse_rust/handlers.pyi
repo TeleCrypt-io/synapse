@@ -10,7 +10,7 @@
 # See the GNU Affero General Public License for more details:
 # <https://www.gnu.org/licenses/agpl-3.0.html>.
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from twisted.internet.defer import Deferred
 
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from synapse.server import HomeServer
 
 class VersionsHandler:
-    def get_versions(self, user_id: Optional[str] = None) -> Deferred[JsonDict]:
+    def get_versions(self) -> Deferred[JsonDict]:
         """
         Assemble a `/versions` response.
 

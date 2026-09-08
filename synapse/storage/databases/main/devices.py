@@ -65,7 +65,6 @@ from synapse.util.cancellation import cancellable
 from synapse.util.duration import Duration
 from synapse.util.iterutils import batch_iter
 from synapse.util.json import json_decoder, json_encoder
-from synapse.util.stringutils import shortstr
 
 if TYPE_CHECKING:
     from synapse.server import HomeServer
@@ -1670,7 +1669,7 @@ class DeviceWorkerStore(RoomMemberWorkerStore, EndToEndKeyWorkerStore):
             logger.info(
                 "Pruning old outbound device list updates for %i users/destinations: %s",
                 len(rows),
-                shortstr((row[0], row[1]) for row in rows),
+                [(row[0], row[1]) for row in rows],
             )
 
             # we want to keep the update with the highest stream_id for each user.

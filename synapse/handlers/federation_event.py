@@ -94,7 +94,6 @@ from synapse.util.async_helpers import Linearizer, concurrently_execute
 from synapse.util.duration import Duration
 from synapse.util.iterutils import batch_iter, partition, sorted_topologically
 from synapse.util.retryutils import NotRetryingDestination
-from synapse.util.stringutils import shortstr
 
 if TYPE_CHECKING:
     from synapse.server import HomeServer
@@ -315,7 +314,7 @@ class FederationEventHandler:
                 logger.info(
                     "Acquiring room lock to fetch %d missing prev_events: %s",
                     len(missing_prevs),
-                    shortstr(missing_prevs),
+                    list(missing_prevs),
                 )
                 async with self._room_pdu_linearizer.queue(pdu.room_id):
                     logger.info(
@@ -353,7 +352,7 @@ class FederationEventHandler:
                 logger.warning(
                     "Rejecting: failed to fetch %d prev events: %s",
                     len(missing_prevs),
-                    shortstr(missing_prevs),
+                    list(missing_prevs),
                 )
                 raise FederationError(
                     "ERROR",
@@ -777,7 +776,7 @@ class FederationEventHandler:
 
         logger.info(
             "Requesting missing events between %s and %s",
-            shortstr(latest),
+            list(latest),
             event_id,
         )
 
@@ -1170,7 +1169,7 @@ class FederationEventHandler:
             "calculating state for a backwards extremity",
             event_id,
             room_id,
-            shortstr(missing_prevs),
+            list(missing_prevs),
         )
         # Calculate the state after each of the previous events, and
         # resolve them to find the correct state at the current event.
@@ -1736,7 +1735,7 @@ class FederationEventHandler:
         logger.info(
             "Persisting %i remaining outliers: %s",
             len(sorted_auth_events),
-            shortstr(e.event_id for e in sorted_auth_events),
+            [e.event_id for e in sorted_auth_events],
         )
 
         # get all the auth events for all the events in this batch. By now, they should
@@ -2186,7 +2185,7 @@ class FederationEventHandler:
         logger.warning(
             "Missing auth events for %s: %s",
             event,
-            shortstr(missing_auth_event_ids),
+            list(missing_auth_event_ids),
         )
         # the fact we can't find the auth event doesn't mean it doesn't
         # exist, which means it is premature to store `event` as rejected.

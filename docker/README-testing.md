@@ -112,9 +112,9 @@ standard `docker logs` tooling. Worker logs contain their worker name
 after the timestamp.
 
 Setting `SYNAPSE_WORKERS_WRITE_LOGS_TO_DISK=1` will cause worker logs to be written to
-`<data_dir>/logs/<worker_name>.log`. Logs are kept for 1 week and rotate every day at 00:
-00, according to the container's clock. Logging for the main process must still be
-configured by modifying the homeserver's log config in your Synapse data volume.
+`<data_dir>/logs/<worker_name>.log`. Synapse and this container do not rotate or discard
+these logs; configure retention externally if it is required. Logging for the main process
+must still be configured by modifying the homeserver's log config in your Synapse data volume.
 
 
 ### Application Services

@@ -74,82 +74,11 @@ class RemoteHandlerTestCase(LoggerCleanupMixin, TestCase):
         # Ensure the data passed through properly.
         self.assertEqual(logs[0], "Hello there, wally!")
 
-    def test_log_backpressure_debug(self) -> None:
-        """
-        When backpressure is hit, DEBUG logs will be shed.
-        """
-        handler = RemoteHandler(
-            "127.0.0.1", 9000, maximum_buffer=10, _reactor=self.reactor
-        )
+    def test_log_output_is_not_shed_on_backpressure(self) -> None:
+        """The remote handler preserves every record while delivery is delayed."""
+        handler = RemoteHandler("127.0.0.1", 9000, _reactor=self.reactor)
         logger = self.get_logger(handler)
 
-        # Send some debug messages
-        for i in range(3):
-            logger.debug("debug %s", i)
-
-        # Send a bunch of useful messages
-        for i in range(7):
-            logger.info("info %s", i)
-
-        # The last debug message pushes it past the maximum buffer
-        logger.debug("too much debug")
-
-        # Allow the reconnection
-        client, server = connect_logging_client(self.reactor, 0)
-        client_transport = checked_cast(FakeTransport, client.transport)
-        client_transport.flush()
-
-        # Only the 7 infos made it through, the debugs were elided
-        logs = server.data.splitlines()
-        self.assertEqual(len(logs), 7)
-        self.assertNotIn(b"debug", server.data)
-
-    def test_log_backpressure_info(self) -> None:
-        """
-        When backpressure is hit, DEBUG and INFO logs will be shed.
-        """
-        handler = RemoteHandler(
-            "127.0.0.1", 9000, maximum_buffer=10, _reactor=self.reactor
-        )
-        logger = self.get_logger(handler)
-
-        # Send some debug messages
-        for i in range(3):
-            logger.debug("debug %s", i)
-
-        # Send a bunch of useful messages
-        for i in range(10):
-            logger.warning("warn %s", i)
-
-        # Send a bunch of info messages
-        for i in range(3):
-            logger.info("info %s", i)
-
-        # The last debug message pushes it past the maximum buffer
-        logger.debug("too much debug")
-
-        # Allow the reconnection
-        client, server = connect_logging_client(self.reactor, 0)
-        client_transport = checked_cast(FakeTransport, client.transport)
-        client_transport.flush()
-
-        # The 10 warnings made it through, the debugs and infos were elided
-        logs = server.data.splitlines()
-        self.assertEqual(len(logs), 10)
-        self.assertNotIn(b"debug", server.data)
-        self.assertNotIn(b"info", server.data)
-
-    def test_log_backpressure_cut_middle(self) -> None:
-        """
-        When backpressure is hit, and no more DEBUG and INFOs cannot be culled,
-        it will cut the middle messages out.
-        """
-        handler = RemoteHandler(
-            "127.0.0.1", 9000, maximum_buffer=10, _reactor=self.reactor
-        )
-        logger = self.get_logger(handler)
-
-        # Send a bunch of useful messages
         for i in range(20):
             logger.warning("warn %s", i)
 
@@ -158,22 +87,14 @@ class RemoteHandlerTestCase(LoggerCleanupMixin, TestCase):
         client_transport = checked_cast(FakeTransport, client.transport)
         client_transport.flush()
 
-        # The first five and last five warnings made it through, the debugs and
-        # infos were elided
         logs = server.data.decode("utf8").splitlines()
-        self.assertEqual(
-            ["warn %s" % (i,) for i in range(5)]
-            + ["warn %s" % (i,) for i in range(15, 20)],
-            logs,
-        )
+        self.assertEqual(["warn %s" % (i,) for i in range(20)], logs)
 
     def test_cancel_connection(self) -> None:
         """
         Gracefully handle the connection being cancelled.
         """
-        handler = RemoteHandler(
-            "127.0.0.1", 9000, maximum_buffer=10, _reactor=self.reactor
-        )
+        handler = RemoteHandler("127.0.0.1", 9000, _reactor=self.reactor)
         logger = self.get_logger(handler)
 
         # Send a message.

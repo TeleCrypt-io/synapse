@@ -81,11 +81,7 @@ class VersionsRestServlet(RestServlet):
         # this request even if authentication yielded through another context.
         assert request.logcontext is not None
         with PreserveLoggingContext(request.logcontext):
-            versions_response_body = await self.rust_handlers.versions.get_versions(
-                # Resolve per-user flags through Synapse's existing authoritative store
-                # rather than entering the Rust database bridge.
-                None
-            )
+            versions_response_body = await self.rust_handlers.versions.get_versions()
 
             if user_id is not None:
                 unstable_features = versions_response_body["unstable_features"]

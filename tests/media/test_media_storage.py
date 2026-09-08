@@ -96,6 +96,25 @@ class RecordingStorageProvider(StorageProvider):
         return None
 
 
+class FailingFetchResponder(Responder):
+    def __init__(self, failure: Exception) -> None:
+        self.failure = failure
+
+    def write_to_consumer(self, consumer: Any) -> Deferred[None]:
+        return defer.fail(self.failure)
+
+
+class FailingFetchStorageProvider(StorageProvider):
+    def __init__(self, failure: Exception) -> None:
+        self.failure = failure
+
+    async def store_file(self, path: str, file_info: FileInfo) -> None:
+        return None
+
+    async def fetch(self, path: str, file_info: FileInfo) -> Responder:
+        return FailingFetchResponder(self.failure)
+
+
 class DeletionRecordingStorageProvider(StorageProvider):
     """A provider whose deletion calls can observe the local media file."""
 
@@ -199,6 +218,33 @@ class MediaStorageTests(unittest.HomeserverTestCase):
         # This uses a real blocking threadpool so we have to wait for it to be
         # actually done :/
         self.get_success(test_ensure_media())
+
+    def test_local_cache_failure_does_not_publish_partial_file(self) -> None:
+        media_storage = MediaStorage(
+            self.hs,
+            self.filepaths,
+            [
+                StorageProviderWrapper(
+                    FailingFetchStorageProvider(OSError("stream failed")),
+                    store_local=True,
+                    store_remote=False,
+                    store_synchronous=True,
+                )
+            ],
+            self.media_storage.local_provider,
+        )
+        file_info = FileInfo(None, "failed_media")
+        local_path = os.path.join(
+            self.primary_base_path, self.filepaths.local_media_filepath_rel("failed_media")
+        )
+
+        async def ensure_media() -> None:
+            async with media_storage.ensure_media_is_in_local_cache(file_info):
+                self.fail("failed media was published")
+
+        self.get_failure(ensure_media(), OSError)
+        self.assertFalse(os.path.exists(local_path))
+        self.assertEqual(os.listdir(os.path.dirname(local_path)), [])
 
     def test_fetch_and_ensure_use_legacy_remote_thumbnail_path(self) -> None:
         file_info = FileInfo(

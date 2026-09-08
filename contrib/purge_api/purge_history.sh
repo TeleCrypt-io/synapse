@@ -106,7 +106,7 @@ for ROOM in "${ROOMS_ARRAY[@]}"; do
       SLEEP=2
       set -x
       # call purge
-      OUT=$(curl --header "$AUTH" -s -d '{"delete_local_events":true}' POST "$API_URL/admin/purge_history/$ROOM/$EVENT_ID")
+      OUT=$(curl --header "$AUTH" -d '{"delete_local_events":true}' POST "$API_URL/admin/purge_history/$ROOM/$EVENT_ID")
       PURGE_ID=$(echo "$OUT" |grep purge_id|cut -d'"' -f4 )
       if [ "$PURGE_ID" == "" ]; then
         # probably the history purge is already in progress for $ROOM
@@ -115,7 +115,7 @@ for ROOM in "${ROOMS_ARRAY[@]}"; do
         while : ; do
           # get status of purge and sleep longer each time if still active
           sleep $SLEEP
-          STATUS=$(curl --header "$AUTH" -s GET "$API_URL/admin/purge_history_status/$PURGE_ID" |grep status|cut -d'"' -f4)
+          STATUS=$(curl --header "$AUTH" GET "$API_URL/admin/purge_history_status/$PURGE_ID" |grep status|cut -d'"' -f4)
           : "$ROOM --> Status: $STATUS"
           [[ "$STATUS" == "active" ]] || break
           SLEEP=$((SLEEP + 1))

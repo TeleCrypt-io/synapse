@@ -19,12 +19,11 @@
 # [This file includes modifications made by New Vector Limited]
 #
 #
-import itertools
 import random
 import re
 import secrets
 import string
-from typing import Any, Iterable
+from typing import Any
 
 from netaddr import valid_ipv6
 
@@ -226,24 +225,6 @@ def parse_and_validate_mxc_uri(mxc: str) -> tuple[str, int | None, str]:
     media_id = m.group(2)
     host, port = parse_and_validate_server_name(server_name)
     return host, port, media_id
-
-
-def shortstr(iterable: Iterable, maxitems: int = 5) -> str:
-    """If iterable has maxitems or fewer, return the stringification of a list
-    containing those items.
-
-    Otherwise, return the stringification of a list with the first maxitems items,
-    followed by "...".
-
-    Args:
-        iterable: iterable to truncate
-        maxitems: number of items to return before truncating
-    """
-
-    items = list(itertools.islice(iterable, maxitems + 1))
-    if len(items) <= maxitems:
-        return str(items)
-    return "[" + ", ".join(repr(r) for r in items[:maxitems]) + ", ...]"
 
 
 def strtobool(val: str) -> bool:

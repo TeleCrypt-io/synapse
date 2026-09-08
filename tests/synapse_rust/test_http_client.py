@@ -137,30 +137,11 @@ class HttpClientTestCase(HomeserverTestCase):
         async def do_request() -> None:
             resp_body = await self._rust_http_client.get(
                 url=self.server.endpoint,
-                response_limit=1 * 1024 * 1024,
             )
             raw_response = json_decoder.decode(resp_body.decode("utf-8"))
             self.assertEqual(raw_response, {"ok": True})
 
         self.get_success(do_request())
-        self.assertEqual(self.server.calls, 1)
-
-    def test_request_response_limit_exceeded(self) -> None:
-        """
-        Test to make sure we handle the response limit being exceeded
-        """
-
-        async def do_request() -> None:
-            await self._rust_http_client.get(
-                url=self.server.endpoint,
-                # Small limit so we hit the limit
-                response_limit=1,
-            )
-
-        self.get_failure(
-            do_request(),
-            RuntimeError,
-        )
         self.assertEqual(self.server.calls, 1)
 
     async def test_logging_context(self) -> None:
@@ -183,7 +164,6 @@ class HttpClientTestCase(HomeserverTestCase):
                     # Make the actual request
                     await self._rust_http_client.get(
                         url=self.server.endpoint,
-                        response_limit=1 * 1024 * 1024,
                     )
                     self._check_current_logcontext("competing")
 

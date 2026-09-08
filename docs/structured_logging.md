@@ -25,11 +25,9 @@ formatters:
 
 handlers:
     file:
-        class: logging.handlers.TimedRotatingFileHandler
+        class: logging.FileHandler
         formatter: structured
         filename: /path/to/my/logs/homeserver.log
-        when: midnight
-        backupCount: 3  # Does not include the current log file.
         encoding: utf8
 
 loggers:
@@ -49,8 +47,6 @@ following arguments:
 
 - `host`: Hostname or IP address of the log aggregator.
 - `port`: Numerical port to contact on the host.
-- `maximum_buffer`: (Optional, defaults to 1000) The maximum buffer size to allow.
-
 A remote structured logging configuration looks similar to the following:
 
 ```yaml

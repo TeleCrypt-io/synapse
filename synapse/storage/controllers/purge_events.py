@@ -33,7 +33,6 @@ from synapse.storage.database import LoggingTransaction
 from synapse.storage.databases import Databases
 from synapse.types.storage import _BackgroundUpdates
 from synapse.util.duration import Duration
-from synapse.util.stringutils import shortstr
 
 if TYPE_CHECKING:
     from synapse.server import HomeServer
@@ -173,7 +172,7 @@ class PurgeEventsStorageController:
             logger.info(
                 "[purge] deleting state groups for room %s: %s",
                 room_id,
-                shortstr(groups_to_sequences.keys(), maxitems=10),
+                list(groups_to_sequences.keys()),
             )
             made_progress = await self._delete_state_groups(
                 room_id, groups_to_sequences

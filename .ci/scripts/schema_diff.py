@@ -93,14 +93,26 @@ def diff_schemas(
 
             result = subprocess.run(
                 ["diff", "-U", "10", str(before_file), str(after_file)],
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
             )
 
             if result.returncode == 0:
                 parts.append(f"### {db} ({engine})\n\nUnchanged\n")
+            elif result.returncode == 1:
+                diff_output = result.stdout
+                if result.stderr:
+                    diff_output += f"\n{result.stderr}"
+                parts.append(f"### {db} ({engine})\n\n```diff\n{diff_output}\n```\n")
             else:
-                parts.append(f"### {db} ({engine})\n\n```diff\n{result.stdout}\n```\n")
+                command_output = result.stdout
+                if result.stderr:
+                    command_output += f"\n{result.stderr}"
+                raise RuntimeError(
+                    f"diff failed for {db} ({engine}) with exit code "
+                    f"{result.returncode}:\n{command_output}"
+                )
 
     return "\n".join(parts)
 
@@ -135,7 +147,7 @@ def main() -> None:
         # If we are on a named branch, use the branch name; otherwise use the SHA.
         head_ref = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True,
+            stdout=subprocess.PIPE,
             text=True,
             cwd=REPO_ROOT,
             check=True,
@@ -143,14 +155,14 @@ def main() -> None:
 
         before_sha = subprocess.run(
             ["git", "rev-parse", args.base],
-            capture_output=True,
+            stdout=subprocess.PIPE,
             text=True,
             cwd=REPO_ROOT,
             check=True,
         ).stdout.strip()
         after_sha = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            capture_output=True,
+            stdout=subprocess.PIPE,
             text=True,
             cwd=REPO_ROOT,
             check=True,
@@ -164,7 +176,7 @@ def main() -> None:
                 # Machine-readable output for easy parsing
                 "--porcelain",
             ],
-            capture_output=True,
+            stdout=subprocess.PIPE,
             text=True,
             cwd=REPO_ROOT,
             check=True,

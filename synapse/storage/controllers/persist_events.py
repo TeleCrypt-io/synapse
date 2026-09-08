@@ -78,7 +78,6 @@ from synapse.types import (
 from synapse.types.state import StateFilter
 from synapse.util.async_helpers import ObservableDeferred, yieldable_gather_results
 from synapse.util.metrics import Measure
-from synapse.util.stringutils import shortstr
 
 if TYPE_CHECKING:
     from synapse.server import HomeServer
@@ -1007,7 +1006,7 @@ class EventsPersistenceStorageController:
             )
             logger.error(
                 "_calculate_new_state_dag_extremities: was handling %s",
-                shortstr([ev.event_id for ev in all_new_state_events]),
+                [ev.event_id for ev in all_new_state_events],
             )
             raise SynapseError(
                 code=500,

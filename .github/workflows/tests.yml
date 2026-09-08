@@ -16,6 +16,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
   RUST_VERSION: 1.87.0
   # This nightly is roughly the last to be branded 1.87.0.
   #

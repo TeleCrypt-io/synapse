@@ -45,6 +45,7 @@ from twisted.internet.protocol import Factory, Protocol
 from twisted.internet.tcp import Connection
 from twisted.python.failure import Failure
 
+
 @attr.s(slots=True, auto_attribs=True)
 @implementer(IPushProducer)
 class LogProducer:

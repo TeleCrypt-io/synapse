@@ -400,7 +400,7 @@ def _parse_key_servers(
     except jsonschema.ValidationError as e:
         raise ConfigError(
             "Unable to parse 'trusted_key_servers': {}".format(
-                e.message  # noqa: B306, jsonschema.ValidationError.message is a valid attribute
+                e.message
             )
         )
 

@@ -72,11 +72,7 @@ impl HttpClient {
         })
     }
 
-    pub fn get<'a>(
-        &self,
-        py: Python<'a>,
-        url: String,
-    ) -> PyResult<Bound<'a, PyAny>> {
+    pub fn get<'a>(&self, py: Python<'a>, url: String) -> PyResult<Bound<'a, PyAny>> {
         self.send_request(py, self.client.get(url))
     }
 

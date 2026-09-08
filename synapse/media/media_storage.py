@@ -280,9 +280,8 @@ class MediaStorage:
 
         try:
             if self.local_provider:
-                media_filepath = os.path.join(
-                    self.local_media_directory, path  # type: ignore[arg-type]
-                )
+                assert self.local_media_directory is not None
+                media_filepath = os.path.join(self.local_media_directory, path)
                 os.makedirs(os.path.dirname(media_filepath), exist_ok=True)
 
                 with start_active_span("writing to main media repo"):
@@ -387,11 +386,9 @@ class MediaStorage:
         # URL cache files are stored locally and should not go through storage providers
         if file_info.url_cache:
             if self.local_provider:
+                assert self.local_media_directory is not None
                 for path in paths:
-                    local_path = os.path.join(
-                        self.local_media_directory,
-                        path,  # type: ignore[arg-type]
-                    )
+                    local_path = os.path.join(self.local_media_directory, path)
                     if os.path.isfile(local_path):
                         # Import here to avoid circular import
                         from .media_storage import FileResponder
@@ -441,19 +438,14 @@ class MediaStorage:
         """
         paths = self._file_info_to_paths(file_info)
         if self.local_provider:
+            assert self.local_media_directory is not None
             for path in paths:
-                local_path = os.path.join(
-                    self.local_media_directory,
-                    path,  # type: ignore[arg-type]
-                )
+                local_path = os.path.join(self.local_media_directory, path)
                 if os.path.exists(local_path):
                     yield local_path
                     return
 
-            local_path = os.path.join(
-                self.local_media_directory,
-                paths[0],  # type: ignore[arg-type]
-            )
+            local_path = os.path.join(self.local_media_directory, paths[0])
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
             for provider in self.storage_providers:

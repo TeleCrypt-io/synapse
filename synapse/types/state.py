@@ -21,7 +21,6 @@
 #
 import logging
 from typing import (
-    TYPE_CHECKING,
     Any,
     Callable,
     Collection,
@@ -35,9 +34,6 @@ from immutabledict import immutabledict
 
 from synapse.api.constants import EventTypes
 from synapse.types import MutableStateMap, StateKey, StateMap
-
-if TYPE_CHECKING:
-    pass  # noqa: used within quoted type hint; flake8 sad
 
 
 logger = logging.getLogger(__name__)

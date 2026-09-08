@@ -11,11 +11,12 @@
 # <https://www.gnu.org/licenses/agpl-3.0.html>.
 
 import logging
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 from twisted.internet.testing import MemoryReactor
 
+from synapse.http.site import SynapseRequest
 from synapse.logging.context import current_context
 from synapse.rest import admin
 from synapse.rest.client import login, versions
@@ -119,6 +120,8 @@ class VersionsTestCase(unittest.HomeserverTestCase):
                 access_token=self.admin_user_tok,
             )
 
+        request = cast(SynapseRequest, channel.request)
+        assert request.logcontext is not None
         self.assertEqual(channel.code, 200, channel.result)
         self._sanity_check_versions_response(channel.json_body)
         self._assert_feature_flags(channel.json_body, False)
@@ -128,7 +131,7 @@ class VersionsTestCase(unittest.HomeserverTestCase):
         )
         self.assertTrue(
             all(
-                context is channel.request.logcontext
+                context is request.logcontext
                 for _, context in seen_interactions
             )
         )

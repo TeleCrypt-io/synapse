@@ -25,6 +25,7 @@ import twisted.logger
 from synapse.logging.context import LoggingContextFilter
 from synapse.synapse_rust import reset_logging_config
 
+
 class ToTwistedHandler(logging.Handler):
     """logging handler which sends the logs to the twisted log"""
 

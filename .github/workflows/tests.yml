@@ -117,12 +117,13 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Install Rust
         run: .ci/scripts/setup_rust_toolchain.sh "${{ env.RUST_VERSION }}"
-      - uses: Swatinem/rust-cache@v2.9.1
-      - uses: matrix-org/setup-python-poetry@v2.0.0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.14"
-          poetry-version: "2.4.1"
-          extras: "all"
+      - name: Setup Poetry
+        env:
+          POETRY_EXTRAS: all
+        run: .ci/scripts/setup_poetry.sh
       - run: poetry run scripts-dev/generate_sample_config.sh --check
       - run: poetry run scripts-dev/config-lint.sh
 
@@ -156,11 +157,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7.0.1
-      - name: Setup Poetry
-        uses: matrix-org/setup-python-poetry@v2.0.0
+      - uses: actions/setup-python@v7.0.0
         with:
-          poetry-version: "2.4.1"
-          install-project: "false"
+          python-version: "3.14"
+      - name: Setup Poetry
+        env:
+          POETRY_INSTALL_PROJECT: "false"
+        run: .ci/scripts/setup_poetry.sh
 
       - name: Run ruff check
         run: poetry run ruff check --output-format=github .
@@ -179,18 +182,19 @@ jobs:
         uses: actions/checkout@v7.0.1
       - name: Install Rust
         run: .ci/scripts/setup_rust_toolchain.sh "${{ env.RUST_VERSION }}"
-      - uses: Swatinem/rust-cache@v2.9.1
-      - name: Setup Poetry
-        uses: matrix-org/setup-python-poetry@v2.0.0
+      - uses: actions/setup-python@v7.0.0
         with:
+          python-version: "3.14"
+      - name: Setup Poetry
+        env:
           # We want to make use of type hints in optional dependencies too.
-          extras: all
+          POETRY_EXTRAS: all
           # We have seen odd mypy failures that were resolved when we started
           # installing the project again:
           # https://github.com/matrix-org/synapse/pull/15376#issuecomment-1498983775
           # To make CI green, err towards caution and install the project.
-          install-project: "true"
-          poetry-version: "2.4.1"
+          POETRY_INSTALL_PROJECT: "true"
+        run: .ci/scripts/setup_poetry.sh
 
       # Cribbed from
       # https://github.com/AustinScola/mypy-cache-github-action/blob/85ea4f2972abed39b33bd02c36e341b28ca59213/src/restore.ts#L10-L17
@@ -238,7 +242,6 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Install Rust
         run: .ci/scripts/setup_rust_toolchain.sh "${{ env.RUST_VERSION }}" --component clippy
-      - uses: Swatinem/rust-cache@v2.9.1
       - run: cargo clippy -- -D warnings
 
   # We also lint against a nightly rustc so that we can lint the benchmark
@@ -252,7 +255,6 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Install Rust
         run: .ci/scripts/setup_rust_toolchain.sh "${{ env.RUST_NIGHTLY_VERSION }}" --component clippy
-      - uses: Swatinem/rust-cache@v2.9.1
       - run: cargo clippy --all-features -- -D warnings
 
   lint-rust:
@@ -265,14 +267,15 @@ jobs:
         uses: actions/checkout@v7.0.1
       - name: Install Rust
         run: .ci/scripts/setup_rust_toolchain.sh "${{ env.RUST_VERSION }}"
-      - uses: Swatinem/rust-cache@v2.9.1
-      - name: Setup Poetry
-        uses: matrix-org/setup-python-poetry@v2.0.0
+      - uses: actions/setup-python@v7.0.0
         with:
+          python-version: "3.14"
+      - name: Setup Poetry
+        env:
           # Install like a normal project from source with all optional dependencies
-          extras: all
-          install-project: "true"
-          poetry-version: "2.4.1"
+          POETRY_EXTRAS: all
+          POETRY_INSTALL_PROJECT: "true"
+        run: .ci/scripts/setup_poetry.sh
 
       - name: Ensure `Cargo.lock` is up to date (no stray changes after install)
         # The `::error::` syntax is using GitHub Actions' error annotations, see
@@ -299,7 +302,6 @@ jobs:
         # We use nightly so that we can use some unstable options that we use in
         # `.rustfmt.toml`.
         run: .ci/scripts/setup_rust_toolchain.sh "${{ env.RUST_NIGHTLY_VERSION }}" --component rustfmt
-      - uses: Swatinem/rust-cache@v2.9.1
       - run: cargo fmt --check
 
   lint-golangci:
@@ -407,12 +409,13 @@ jobs:
 
       - name: Install Rust
         run: .ci/scripts/setup_rust_toolchain.sh "${{ env.RUST_VERSION }}"
-      - uses: Swatinem/rust-cache@v2.9.1
-      - uses: matrix-org/setup-python-poetry@v2.0.0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: ${{ matrix.job.python-version }}
-          poetry-version: "2.4.1"
-          extras: ${{ matrix.job.extras }}
+      - name: Setup Poetry
+        env:
+          POETRY_EXTRAS: ${{ matrix.job.extras }}
+        run: .ci/scripts/setup_poetry.sh
       - name: Await PostgreSQL
         if: ${{ matrix.job.postgres-version }}
         timeout-minutes: 2
@@ -447,7 +450,6 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Install Rust
         run: .ci/scripts/setup_rust_toolchain.sh "${{ env.RUST_VERSION }}"
-      - uses: Swatinem/rust-cache@v2.9.1
       # There aren't wheels for some of the older deps, so we need to install
       # their build dependencies
       - run: |
@@ -506,11 +508,13 @@ jobs:
       - uses: actions/checkout@v7.0.1
       # Install libs necessary for PyPy to build binary wheels for dependencies
       - run: sudo apt-get install xmlsec1 libxml2-dev libxslt-dev
-      - uses: matrix-org/setup-python-poetry@v2.0.0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
-          poetry-version: "2.4.1"
-          extras: ${{ matrix.extras }}
+      - name: Setup Poetry
+        env:
+          POETRY_EXTRAS: ${{ matrix.extras }}
+        run: .ci/scripts/setup_poetry.sh
       - run: poetry run trial --jobs=2 tests
       - name: Dump logs
         # Logs are most useful when the command fails, always include them.
@@ -559,7 +563,6 @@ jobs:
 
       - name: Install Rust
         run: .ci/scripts/setup_rust_toolchain.sh "${{ env.RUST_VERSION }}"
-      - uses: Swatinem/rust-cache@v2.9.1
       - name: Run SyTest
         run: /bootstrap.sh synapse
         working-directory: /src
@@ -599,10 +602,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - run: sudo apt-get install xmlsec1 postgresql-client
-      - uses: matrix-org/setup-python-poetry@v2.0.0
+      - uses: actions/setup-python@v7.0.0
         with:
-          poetry-version: "2.4.1"
-          extras: "postgres"
+          python-version: "3.14"
+      - name: Setup Poetry
+        env:
+          POETRY_EXTRAS: postgres
+        run: .ci/scripts/setup_poetry.sh
       - run: .ci/scripts/test_export_data_command.sh
         env:
           PGHOST: localhost
@@ -651,11 +657,13 @@ jobs:
           wget -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
           sudo apt-get update
       - run: sudo apt-get install xmlsec1 postgresql-client
-      - uses: matrix-org/setup-python-poetry@v2.0.0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
-          poetry-version: "2.4.1"
-          extras: "postgres"
+      - name: Setup Poetry
+        env:
+          POETRY_EXTRAS: postgres
+        run: .ci/scripts/setup_poetry.sh
       - run: .ci/scripts/test_synapse_port_db.sh
         id: run_tester_script
         env:
@@ -696,7 +704,6 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Install Rust
         run: .ci/scripts/setup_rust_toolchain.sh "${{ env.RUST_VERSION }}"
-      - uses: Swatinem/rust-cache@v2.9.1
       - run: cargo test
 
   # We want to ensure that the cargo benchmarks still compile, which requires a
@@ -713,7 +720,6 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Install Rust
         run: .ci/scripts/setup_rust_toolchain.sh "${{ env.RUST_NIGHTLY_VERSION }}"
-      - uses: Swatinem/rust-cache@v2.9.1
       - run: cargo bench --no-run
 
   # a job which marks all the other jobs as complete, thus allowing PRs to be merged.

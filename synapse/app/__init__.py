@@ -29,9 +29,7 @@ logger = logging.getLogger(__name__)
 try:
     check_dependencies.check_requirements()
 except check_dependencies.DependencyException as e:
-    sys.stderr.writelines(
-        e.message  # noqa: B306, DependencyException.message is a property
-    )
+    sys.stderr.writelines(e.message)
     sys.exit(1)
 
 

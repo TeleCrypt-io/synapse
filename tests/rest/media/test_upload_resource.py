@@ -133,14 +133,14 @@ class UploadResourceLinearizerTests(unittest.TestCase):
         self.reactor, self.clock = get_clock()
         self.callbacks = _FakeCallbacks()
         self.media_repo = _FakeMediaRepository(self.clock, self.callbacks)
-        self.servlet = UploadServlet.__new__(UploadServlet)
+        self.servlet: Any = UploadServlet.__new__(UploadServlet)
         self.servlet.auth = _FakeAuth()
         self.servlet.media_repo = self.media_repo
         self.servlet.max_upload_size = 1024
         self.servlet._media_repository_callbacks = self.callbacks
 
-    def _async_servlet(self) -> AsyncUploadServlet:
-        servlet = AsyncUploadServlet.__new__(AsyncUploadServlet)
+    def _async_servlet(self) -> Any:
+        servlet: Any = AsyncUploadServlet.__new__(AsyncUploadServlet)
         servlet.auth = _FakeAuth()
         servlet.media_repo = self.media_repo
         servlet.store = _FakeStore()
@@ -168,9 +168,7 @@ class UploadResourceLinearizerTests(unittest.TestCase):
     def _start(self, user_id: str) -> "Deferred[None]":
         return defer.ensureDeferred(self.servlet.on_POST(_FakeRequest(user_id)))
 
-    def _start_put(
-        self, servlet: AsyncUploadServlet, user_id: str
-    ) -> "Deferred[None]":
+    def _start_put(self, servlet: Any, user_id: str) -> "Deferred[None]":
         return defer.ensureDeferred(
             servlet.on_PUT(_FakeRequest(user_id), "example.com", "media-id")
         )

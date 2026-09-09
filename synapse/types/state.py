@@ -28,7 +28,6 @@ from immutabledict import immutabledict
 from synapse.api.constants import EventTypes
 from synapse.types import MutableStateMap, StateKey, StateMap
 
-
 logger = logging.getLogger(__name__)
 
 # Used for generic functions below

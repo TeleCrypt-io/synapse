@@ -20,14 +20,7 @@
 #
 #
 import logging
-from typing import (
-    Any,
-    Callable,
-    Collection,
-    Iterable,
-    Mapping,
-    TypeVar,
-)
+from typing import Any, Callable, Collection, Iterable, Mapping, TypeVar
 
 import attr
 from immutabledict import immutabledict

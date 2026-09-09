@@ -133,11 +133,12 @@ class UploadResourceLinearizerTests(unittest.TestCase):
         self.reactor, self.clock = get_clock()
         self.callbacks = _FakeCallbacks()
         self.media_repo = _FakeMediaRepository(self.clock, self.callbacks)
-        self.servlet: Any = UploadServlet.__new__(UploadServlet)
-        self.servlet.auth = _FakeAuth()
-        self.servlet.media_repo = self.media_repo
-        self.servlet.max_upload_size = 1024
-        self.servlet._media_repository_callbacks = self.callbacks
+        servlet: Any = UploadServlet.__new__(UploadServlet)
+        servlet.auth = _FakeAuth()
+        servlet.media_repo = self.media_repo
+        servlet.max_upload_size = 1024
+        servlet._media_repository_callbacks = self.callbacks
+        self.servlet = servlet
 
     def _async_servlet(self) -> Any:
         servlet: Any = AsyncUploadServlet.__new__(AsyncUploadServlet)
@@ -156,9 +157,7 @@ class UploadResourceLinearizerTests(unittest.TestCase):
         def respond(*args: Any, **kwargs: Any) -> None:
             responses.append(args)
 
-        patcher = patch(
-            "synapse.rest.media.upload_resource.respond_with_json", respond
-        )
+        patcher = patch("synapse.rest.media.upload_resource.respond_with_json", respond)
         with patcher:
             yield responses
 

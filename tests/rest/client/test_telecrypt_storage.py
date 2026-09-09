@@ -17,7 +17,7 @@
 import json
 from contextlib import asynccontextmanager
 from io import BytesIO
-from typing import Any, Generator, cast
+from typing import Any, AsyncIterator, Generator, cast
 
 from twisted.internet import defer
 from twisted.trial import unittest
@@ -30,6 +30,7 @@ from synapse.rest.client.telecrypt_storage import (
     enforce_delete_body_limit,
     parse_delete_media_ids,
 )
+from synapse.types import JsonDict
 
 
 def _frozen_thumbnails() -> list[ThumbnailInfo]:
@@ -110,7 +111,7 @@ class _FakeLock:
         self.active = False
 
     @asynccontextmanager
-    async def queue(self, user_id: str):
+    async def queue(self, user_id: str) -> AsyncIterator[None]:
         self.events.append("lock-enter")
         self.active = True
         try:
@@ -137,11 +138,14 @@ class _FakeStore:
         self.metadata_failure = metadata_failure
         self.metadata_attempts: list[list[str]] = []
         self.deleted_media_ids: list[list[str]] = []
-        self.media = media or type(
-            "Media",
-            (),
-            {"user_id": "@owner:example.com", "url_cache": None},
-        )()
+        self.media = (
+            media
+            or type(
+                "Media",
+                (),
+                {"user_id": "@owner:example.com", "url_cache": None},
+            )()
+        )
 
     async def get_local_media(self, media_id: str) -> Any:
         assert self.lock.active
@@ -150,9 +154,7 @@ class _FakeStore:
             return self.media_by_id.get(media_id)
         return self.media
 
-    async def get_local_media_thumbnails(
-        self, media_id: str
-    ) -> list[ThumbnailInfo]:
+    async def get_local_media_thumbnails(self, media_id: str) -> list[ThumbnailInfo]:
         assert self.lock.active
         return self.thumbnails
 
@@ -293,7 +295,10 @@ class TelecryptStorageValidationTests(unittest.TestCase):
 
         body = json.dumps({"media_ids": ["mxc://example.com/file"]}).encode()
         request = _FakeRequest(body, content_length=str(len(body)))
-        result = yield defer.ensureDeferred(servlet.on_POST(request))
+        result = cast(
+            tuple[int, JsonDict],
+            (yield defer.ensureDeferred(servlet.on_POST(request))),
+        )
 
         self.assertEqual(result[0], 204)
         self.assertEqual(
@@ -366,8 +371,13 @@ class TelecryptStorageValidationTests(unittest.TestCase):
             }
         ).encode()
         request = _FakeRequest(body, content_length=str(len(body)))
-        error = yield self.assertFailure(
-            defer.ensureDeferred(servlet.on_POST(request)), NotFoundError
+        error = cast(
+            NotFoundError,
+            (
+                yield self.assertFailure(
+                    defer.ensureDeferred(servlet.on_POST(request)), NotFoundError
+                )
+            ),
         )
 
         self.assertEqual(error.code, 404)
@@ -404,8 +414,13 @@ class TelecryptStorageValidationTests(unittest.TestCase):
 
         body = json.dumps({"media_ids": ["mxc://example.com/file"]}).encode()
         request = _FakeRequest(body, content_length=str(len(body)))
-        error = yield self.assertFailure(
-            defer.ensureDeferred(servlet.on_POST(request)), SynapseError
+        error = cast(
+            SynapseError,
+            (
+                yield self.assertFailure(
+                    defer.ensureDeferred(servlet.on_POST(request)), SynapseError
+                )
+            ),
         )
 
         self.assertEqual(error.code, 502)
@@ -450,7 +465,10 @@ class TelecryptStorageValidationTests(unittest.TestCase):
 
         store.metadata_failure = None
         retry_request = _FakeRequest(body, content_length=str(len(body)))
-        result = yield defer.ensureDeferred(servlet.on_POST(retry_request))
+        result = cast(
+            tuple[int, JsonDict],
+            (yield defer.ensureDeferred(servlet.on_POST(retry_request))),
+        )
 
         self.assertEqual(result[0], 204)
         self.assertEqual(len(storage.delete_calls), 2)
@@ -492,8 +510,13 @@ class TelecryptStorageValidationTests(unittest.TestCase):
 
         body = json.dumps({"media_ids": ["mxc://example.com/cache"]}).encode()
         request = _FakeRequest(body, content_length=str(len(body)))
-        error = yield self.assertFailure(
-            defer.ensureDeferred(servlet.on_POST(request)), SynapseError
+        error = cast(
+            SynapseError,
+            (
+                yield self.assertFailure(
+                    defer.ensureDeferred(servlet.on_POST(request)), SynapseError
+                )
+            ),
         )
 
         self.assertEqual(error.code, 400)

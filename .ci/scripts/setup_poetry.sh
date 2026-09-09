@@ -17,4 +17,10 @@ if [[ "${POETRY_INSTALL_PROJECT:-true}" == "false" ]]; then
 fi
 
 python -m poetry check --lock
-python -m poetry "${poetry_args[@]}"
+# Thrift's upstream setup.cfg requests optimized bytecode during source builds,
+# which leaves __pycache__ files in the wheel. Keep the override scoped to this
+# dependency installation; it applies to any setuptools source build spawned by
+# this command, and DIST_EXTRA_CONFIG is inherited by PEP 517 backends.
+DIST_EXTRA_CONFIG="${PWD}/.ci/setuptools-install.cfg" \
+POETRY_INSTALLER_NO_BINARY=thrift \
+    python -m poetry "${poetry_args[@]}"
